@@ -13,7 +13,7 @@ model User {
   id            String   @id @default(cuid())
   email         String   @unique
   name          String?
-  plan          String   @default("basic")
+  plan          String   @default("basic") // basic | advanced | premium
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   contacts      Contact[]
@@ -22,6 +22,8 @@ model User {
   timelineItems TimelineItem[]
   vaultItems    VaultItem[]
   executor      Executor?
+  photos        Photo[]
+  settings      Settings?
 }
 
 model Contact {
@@ -60,6 +62,27 @@ model TimelineItem {
   mediaUrl  String?
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id])
+  photos    Photo[]
+}
+
+model Photo {
+  id             String        @id @default(cuid())
+  userId         String
+  timelineItemId String?
+  url            String
+  thumbnailUrl   String?
+  blobPath       String        // path in Vercel Blob, used for deletion
+  caption        String?
+  width          Int?
+  height         Int?
+  sizeBytes      Int?
+  order          Int           @default(0)
+  createdAt      DateTime      @default(now())
+  user           User          @relation(fields: [userId], references: [id])
+  timelineItem   TimelineItem? @relation(fields: [timelineItemId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([timelineItemId])
 }
 
 model Arrangement {
@@ -93,4 +116,18 @@ model Executor {
   unlockedAt     DateTime?
   createdAt      DateTime  @default(now())
   user           User      @relation(fields: [userId], references: [id])
+}
+
+model Settings {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  pageTurnStyle   String   @default("fade")    // fade | curl
+  fontScale       String   @default("normal")  // small | normal | large | xlarge
+  highContrast    Boolean  @default(false)
+  ttsEnabled      Boolean  @default(false)
+  sttEnabled      Boolean  @default(false)
+  reducedMotion   Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id])
 }

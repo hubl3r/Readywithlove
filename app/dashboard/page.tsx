@@ -1,13 +1,42 @@
+// app/dashboard/page.tsx
 'use client'
 
 import { UserButton, useUser } from '@clerk/nextjs'
 import Link from 'next/link'
 import { motion } from 'motion/react'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+
+interface Stats {
+  timelineCount: number
+  messageCount: number
+  arrangementCount: number
+  contactCount: number
+  vaultCount: number
+  hasExecutor: boolean
+}
 
 export default function Dashboard() {
   const { user, isLoaded } = useUser()
   const [hoveredCard, setHoveredCard] = useState<number | null>(null)
+  const [stats, setStats] = useState<Stats>({
+    timelineCount: 0,
+    messageCount: 0,
+    arrangementCount: 0,
+    contactCount: 0,
+    vaultCount: 0,
+    hasExecutor: false,
+  })
+  const [loadingStats, setLoadingStats] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/stats')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) setStats(data)
+        setLoadingStats(false)
+      })
+      .catch(() => setLoadingStats(false))
+  }, [])
 
   const sections = [
     {
@@ -16,7 +45,7 @@ export default function Dashboard() {
       subtitle: 'Your life, as a story',
       desc: 'Add milestones, photos, and stories from your life.',
       href: '/dashboard/timeline',
-      stat: '0 milestones',
+      stat: stats.timelineCount === 0 ? '0 milestones' : `${stats.timelineCount} milestone${stats.timelineCount === 1 ? '' : 's'}`,
     },
     {
       num: 'ii.',
@@ -24,7 +53,7 @@ export default function Dashboard() {
       subtitle: 'Letters across time',
       desc: 'Record videos and write letters for future delivery.',
       href: '/dashboard/messages',
-      stat: '0 messages',
+      stat: stats.messageCount === 0 ? '0 messages' : `${stats.messageCount} message${stats.messageCount === 1 ? '' : 's'}`,
     },
     {
       num: 'iii.',
@@ -32,7 +61,7 @@ export default function Dashboard() {
       subtitle: 'Affairs in order',
       desc: 'Pre-arrange funeral details, vendors, and final wishes.',
       href: '/dashboard/arrangements',
-      stat: 'Not started',
+      stat: stats.arrangementCount === 0 ? 'Not started' : `${stats.arrangementCount} arranged`,
     },
     {
       num: 'iv.',
@@ -40,7 +69,7 @@ export default function Dashboard() {
       subtitle: 'Your circle',
       desc: 'Manage who gets notified and who acts on your behalf.',
       href: '/dashboard/contacts',
-      stat: '0 contacts',
+      stat: stats.contactCount === 0 ? '0 contacts' : `${stats.contactCount} contact${stats.contactCount === 1 ? '' : 's'}`,
     },
     {
       num: 'v.',
@@ -48,7 +77,7 @@ export default function Dashboard() {
       subtitle: 'What only you know',
       desc: 'Securely store passwords, documents, and final instructions.',
       href: '/dashboard/vault',
-      stat: '0 items',
+      stat: stats.vaultCount === 0 ? '0 items' : `${stats.vaultCount} item${stats.vaultCount === 1 ? '' : 's'}`,
     },
     {
       num: 'vi.',
@@ -56,16 +85,16 @@ export default function Dashboard() {
       subtitle: 'Your trusted person',
       desc: 'Designate who unlocks everything when the time comes.',
       href: '/dashboard/executor',
-      stat: 'Not assigned',
+      stat: stats.hasExecutor ? 'Assigned' : 'Not assigned',
     },
   ]
 
   const checklistItems = [
-    { label: 'Add your first milestone', done: false },
-    { label: 'Record one message for a loved one', done: false },
-    { label: 'Designate an executor', done: false },
-    { label: 'Add 3 emergency contacts', done: false },
-    { label: 'Document funeral preferences', done: false },
+    { label: 'Add your first milestone', done: stats.timelineCount > 0 },
+    { label: 'Record one message for a loved one', done: stats.messageCount > 0 },
+    { label: 'Designate an executor', done: stats.hasExecutor },
+    { label: 'Add 3 emergency contacts', done: stats.contactCount >= 3 },
+    { label: 'Document funeral preferences', done: stats.arrangementCount > 0 },
   ]
 
   const completedCount = checklistItems.filter(item => item.done).length
@@ -174,8 +203,8 @@ export default function Dashboard() {
                     transition={{ duration: 0.4, delay: 0.6 + i * 0.08 }}
                     className="flex items-start gap-3 text-sm md:text-base"
                   >
-                    <span className={`flex-shrink-0 mt-0.5 w-4 h-4 border ${item.done ? 'bg-[#8b6f3a] border-[#8b6f3a]' : 'border-[#2c2416]/40'}`}>
-                      {item.done && <span className="text-[#f5f1e8] text-xs flex items-center justify-center">✓</span>}
+                    <span className={`flex-shrink-0 mt-0.5 w-4 h-4 border flex items-center justify-center ${item.done ? 'bg-[#8b6f3a] border-[#8b6f3a]' : 'border-[#2c2416]/40'}`}>
+                      {item.done && <span className="text-[#f5f1e8] text-xs leading-none">✓</span>}
                     </span>
                     <span className={item.done ? 'line-through text-[#8b6f3a]' : 'text-[#5c4d2e]'}>
                       {item.label}
@@ -255,7 +284,7 @@ export default function Dashboard() {
                   <p className="text-sm md:text-base text-[#5c4d2e] leading-relaxed mb-6 md:mb-8">{section.desc}</p>
                   <div className="flex items-center gap-2 text-[10px] md:text-xs tracking-[0.3em] uppercase text-[#8b6f3a]">
                     <span className="w-6 h-px bg-[#8b6f3a]"></span>
-                    <span>{section.stat}</span>
+                    <span>{loadingStats ? '...' : section.stat}</span>
                   </div>
                 </Link>
               </motion.div>

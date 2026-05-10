@@ -1,9 +1,13 @@
+// app/dashboard/timeline/page.tsx
 'use client'
 
 import { UserButton } from '@clerk/nextjs'
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'motion/react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { PhotoUploader } from '@/components/PhotoUploader'
+import { PhotoCarousel, type PhotoData } from '@/components/PhotoCarousel'
+import { Flipbook, type FlipbookPage } from '@/components/Flipbook'
 
 interface TimelineItem {
   id: string
@@ -11,33 +15,69 @@ interface TimelineItem {
   title: string
   story: string | null
   mediaUrl: string | null
+  photos?: PhotoData[]
 }
+
+interface QuotaInfo {
+  used: number
+  limit: number
+  remaining: number
+  percent: number
+  warning: boolean
+  exceeded: boolean
+}
+
+const FLIPBOOK_THRESHOLD = 10
 
 export default function Timeline() {
   const [items, setItems] = useState<TimelineItem[]>([])
+  const [photosByMilestone, setPhotosByMilestone] = useState<Record<string, PhotoData[]>>({})
+  const [quota, setQuota] = useState<QuotaInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [formData, setFormData] = useState({ date: '', title: '', story: '' })
   const [saving, setSaving] = useState(false)
+  const [expandedItem, setExpandedItem] = useState<string | null>(null)
+  const [showFlipbook, setShowFlipbook] = useState(false)
+  const [pageTurnStyle, setPageTurnStyle] = useState<'fade' | 'curl'>('fade')
 
-  useEffect(() => {
-    fetchItems()
-  }, [])
-
-  const fetchItems = async () => {
+  const fetchAll = useCallback(async () => {
     try {
-      const res = await fetch('/api/timeline')
-      if (res.ok) {
-        const data = await res.json()
-        setItems(data)
+      const [itemsRes, photosRes, settingsRes] = await Promise.all([
+        fetch('/api/timeline'),
+        fetch('/api/photos'),
+        fetch('/api/settings'),
+      ])
+
+      if (itemsRes.ok) setItems(await itemsRes.json())
+
+      if (photosRes.ok) {
+        const data = await photosRes.json()
+        const grouped: Record<string, PhotoData[]> = {}
+        for (const p of data.photos as (PhotoData & { timelineItemId: string | null })[]) {
+          const key = p.timelineItemId || '__loose__'
+          if (!grouped[key]) grouped[key] = []
+          grouped[key].push(p)
+        }
+        setPhotosByMilestone(grouped)
+        setQuota(data.quota)
+      }
+
+      if (settingsRes.ok) {
+        const s = await settingsRes.json()
+        setPageTurnStyle(s.pageTurnStyle === 'curl' ? 'curl' : 'fade')
       }
     } catch (err) {
-      console.error('Failed to fetch timeline:', err)
+      console.error('Failed to fetch:', err)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    fetchAll()
+  }, [fetchAll])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -55,7 +95,7 @@ export default function Timeline() {
       })
 
       if (res.ok) {
-        await fetchItems()
+        await fetchAll()
         setShowForm(false)
         setEditingId(null)
         setFormData({ date: '', title: '', story: '' })
@@ -78,33 +118,82 @@ export default function Timeline() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this milestone?')) return
-
+    if (!confirm('Delete this milestone? Photos attached to it will also be removed.')) return
     try {
       await fetch(`/api/timeline/${id}`, { method: 'DELETE' })
-      await fetchItems()
+      await fetchAll()
     } catch (err) {
       console.error('Failed to delete:', err)
     }
   }
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+  const handleDeletePhoto = async (id: string) => {
+    await fetch(`/api/photos/${id}`, { method: 'DELETE' })
+    await fetchAll()
   }
 
-  const formatYear = (dateString: string) => {
-    return new Date(dateString).getFullYear()
+  const handleCaption = async (id: string, caption: string) => {
+    await fetch(`/api/photos/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caption }),
+    })
+    await fetchAll()
   }
+
+  const handleReorder = async (ids: string[]) => {
+    const items = ids.map((id, i) => ({ id, order: i }))
+    await fetch('/api/photos/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    })
+    await fetchAll()
+  }
+
+  const formatDate = (dateString: string) =>
+    new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+
+  const formatYear = (dateString: string) => new Date(dateString).getFullYear()
 
   // Group items by year
   const groupedByYear: Record<number, TimelineItem[]> = {}
-  items.forEach(item => {
+  items.forEach((item) => {
     const year = formatYear(item.date)
     if (!groupedByYear[year]) groupedByYear[year] = []
     groupedByYear[year].push(item)
   })
   const years = Object.keys(groupedByYear).map(Number).sort((a, b) => a - b)
+
+  const totalPhotos = quota?.used ?? 0
+  const flipbookUnlocked = totalPhotos >= FLIPBOOK_THRESHOLD
+
+  // Build flipbook pages — chronological cover then one spread per milestone with photos
+  const buildFlipbookPages = (): FlipbookPage[] => {
+    const pages: FlipbookPage[] = [
+      {
+        kind: 'cover',
+        title: 'My Story',
+        subtitle: '· an album ·',
+      },
+    ]
+    items.forEach((item) => {
+      const photos = photosByMilestone[item.id] || []
+      if (photos.length === 0) return // skip milestones without photos
+      pages.push({
+        kind: 'milestone',
+        title: item.title,
+        date: formatDate(item.date),
+        story: item.story,
+        photos,
+      })
+    })
+    return pages
+  }
 
   return (
     <div className="min-h-screen bg-[#f5f1e8] text-[#2c2416] relative overflow-x-hidden">
@@ -112,7 +201,7 @@ export default function Timeline() {
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
         <motion.div
           animate={{ x: [0, 200, 0], y: [0, 150, 0], scale: [1, 1.2, 1] }}
-          transition={{ duration: 50, repeat: Infinity, ease: "easeInOut" }}
+          transition={{ duration: 50, repeat: Infinity, ease: 'easeInOut' }}
           className="absolute -top-40 -left-40 w-[500px] md:w-[800px] h-[500px] md:h-[800px] rounded-full"
           style={{
             background: 'radial-gradient(circle, rgba(139,111,58,0.18) 0%, transparent 70%)',
@@ -121,7 +210,7 @@ export default function Timeline() {
         />
         <motion.div
           animate={{ x: [0, -150, 0], y: [0, 200, 0] }}
-          transition={{ duration: 60, repeat: Infinity, ease: "easeInOut" }}
+          transition={{ duration: 60, repeat: Infinity, ease: 'easeInOut' }}
           className="absolute top-1/3 -right-40 w-[500px] md:w-[700px] h-[500px] md:h-[700px] rounded-full"
           style={{
             background: 'radial-gradient(circle, rgba(92,77,46,0.15) 0%, transparent 70%)',
@@ -131,19 +220,30 @@ export default function Timeline() {
       </div>
 
       {/* Grain overlay */}
-      <div className="fixed inset-0 pointer-events-none opacity-[0.04] z-50" style={{
-        backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`
-      }}/>
+      <div
+        className="fixed inset-0 pointer-events-none opacity-[0.04] z-50"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+        }}
+      />
 
       {/* Navigation */}
       <nav className="relative z-10 flex justify-between items-center px-5 md:px-12 py-5 md:py-8 max-w-[1400px] mx-auto gap-3 border-b border-[#2c2416]/10">
-        <Link href="/" className="flex items-baseline gap-2 md:gap-3 min-w-0 hover:opacity-80 transition">
+        <Link
+          href="/"
+          className="flex items-baseline gap-2 md:gap-3 min-w-0 hover:opacity-80 transition"
+        >
           <span className="text-xl md:text-3xl font-serif italic tracking-tight">Ready</span>
           <span className="h-px w-6 bg-[#2c2416] hidden sm:block"></span>
-          <span className="text-[10px] md:text-xl tracking-[0.2em] md:tracking-[0.3em] uppercase text-[#5c4d2e] truncate">with love</span>
+          <span className="text-[10px] md:text-xl tracking-[0.2em] md:tracking-[0.3em] uppercase text-[#5c4d2e] truncate">
+            with love
+          </span>
         </Link>
         <div className="flex items-center gap-4 md:gap-6">
-          <Link href="/dashboard" className="text-[10px] md:text-sm tracking-widest uppercase hover:text-[#8b6f3a] transition">
+          <Link
+            href="/dashboard"
+            className="text-[10px] md:text-sm tracking-widest uppercase hover:text-[#8b6f3a] transition"
+          >
             ← Dashboard
           </Link>
           <UserButton />
@@ -162,24 +262,58 @@ export default function Timeline() {
             · Chapter One ·
           </p>
           <h1 className="font-serif text-4xl md:text-7xl leading-tight mb-3 md:mb-4">
-            Your life,<br/>
+            Your life,
+            <br />
             <span className="italic text-[#8b6f3a]">as a timeline.</span>
           </h1>
           <p className="text-base md:text-lg text-[#5c4d2e] font-light max-w-2xl">
-            Add the milestones that mattered—from the day you were born to the moments still being written. Photos, stories, and amusing anecdotes only you can tell.
+            Add the milestones that mattered—from the day you were born to the moments still being
+            written. Photos, stories, and amusing anecdotes only you can tell.
           </p>
 
-          <button
-            onClick={() => {
-              setShowForm(true)
-              setEditingId(null)
-              setFormData({ date: '', title: '', story: '' })
-            }}
-            className="mt-8 md:mt-10 group inline-flex items-center gap-3 bg-[#2c2416] text-[#f5f1e8] px-6 md:px-8 py-3 md:py-4 hover:bg-[#8b6f3a] transition cursor-pointer"
-          >
-            <span className="tracking-[0.2em] uppercase text-xs md:text-sm">Add a milestone</span>
-            <span className="text-lg group-hover:translate-x-1 transition">+</span>
-          </button>
+          <div className="mt-8 md:mt-10 flex flex-wrap gap-3 md:gap-4 items-center">
+            <button
+              onClick={() => {
+                setShowForm(true)
+                setEditingId(null)
+                setFormData({ date: '', title: '', story: '' })
+              }}
+              className="group inline-flex items-center gap-3 bg-[#2c2416] text-[#f5f1e8] px-6 md:px-8 py-3 md:py-4 hover:bg-[#8b6f3a] transition cursor-pointer"
+            >
+              <span className="tracking-[0.2em] uppercase text-xs md:text-sm">Add a milestone</span>
+              <span className="text-lg group-hover:translate-x-1 transition">+</span>
+            </button>
+
+            <button
+              onClick={() => setShowFlipbook(true)}
+              disabled={!flipbookUnlocked}
+              className="group inline-flex items-center gap-3 border border-[#2c2416] text-[#2c2416] px-6 md:px-8 py-3 md:py-4 hover:bg-[#2c2416] hover:text-[#f5f1e8] transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[#2c2416]"
+              title={
+                flipbookUnlocked
+                  ? 'Open the album'
+                  : `Add ${FLIPBOOK_THRESHOLD - totalPhotos} more photo${FLIPBOOK_THRESHOLD - totalPhotos === 1 ? '' : 's'} to unlock`
+              }
+            >
+              <span className="tracking-[0.2em] uppercase text-xs md:text-sm">
+                {flipbookUnlocked
+                  ? 'Open the album'
+                  : `Album · ${totalPhotos}/${FLIPBOOK_THRESHOLD}`}
+              </span>
+              <span>📖</span>
+            </button>
+
+            {quota && (
+              <p className="text-xs md:text-sm text-[#5c4d2e] font-serif italic ml-auto">
+                {quota.used} / {quota.limit} photos
+                {quota.warning && (
+                  <span className="text-[#c0392b] ml-2 not-italic">· nearing limit</span>
+                )}
+                {quota.exceeded && (
+                  <span className="text-[#c0392b] ml-2 not-italic">· full</span>
+                )}
+              </p>
+            )}
+          </div>
         </motion.div>
 
         {/* Timeline */}
@@ -196,7 +330,8 @@ export default function Timeline() {
               Your story begins here.
             </p>
             <p className="text-sm md:text-base text-[#8b6f3a] mb-8 max-w-md mx-auto px-5">
-              Start with the day you were born. Or any moment that mattered. There's no wrong place to begin.
+              Start with the day you were born. Or any moment that mattered. There's no wrong
+              place to begin.
             </p>
           </motion.div>
         ) : (
@@ -221,49 +356,129 @@ export default function Timeline() {
                 </motion.div>
 
                 {/* Items in this year */}
-                {groupedByYear[year].map((item, itemIdx) => (
-                  <motion.div
-                    key={item.id}
-                    initial={{ opacity: 0, y: 30 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true, margin: "-50px" }}
-                    transition={{ duration: 0.5, delay: itemIdx * 0.05 }}
-                    className={`relative mb-6 md:mb-8 ${
-                      itemIdx % 2 === 0 ? 'md:pr-1/2' : 'md:pl-1/2'
-                    }`}
-                  >
-                    <div className={`pl-12 md:pl-0 ${itemIdx % 2 === 0 ? 'md:pr-12 md:text-right' : 'md:pl-12'}`}>
-                      <div className="absolute left-4 md:left-1/2 top-3 -translate-x-1/2 w-2 h-2 bg-[#5c4d2e] rounded-full z-10"></div>
+                {groupedByYear[year].map((item, itemIdx) => {
+                  const photos = photosByMilestone[item.id] || []
+                  const isExpanded = expandedItem === item.id
+                  return (
+                    <motion.div
+                      key={item.id}
+                      initial={{ opacity: 0, y: 30 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true, margin: '-50px' }}
+                      transition={{ duration: 0.5, delay: itemIdx * 0.05 }}
+                      className={`relative mb-6 md:mb-8 ${
+                        itemIdx % 2 === 0 ? 'md:pr-1/2' : 'md:pl-1/2'
+                      }`}
+                    >
+                      <div
+                        className={`pl-12 md:pl-0 ${
+                          itemIdx % 2 === 0 ? 'md:pr-12 md:text-right' : 'md:pl-12'
+                        }`}
+                      >
+                        <div className="absolute left-4 md:left-1/2 top-3 -translate-x-1/2 w-2 h-2 bg-[#5c4d2e] rounded-full z-10"></div>
 
-                      <div className="bg-[#f5f1e8]/80 backdrop-blur-md border border-[#2c2416]/10 p-5 md:p-6 group hover:bg-[#ede5d3]/80 transition">
-                        <p className="text-[10px] md:text-xs tracking-[0.2em] uppercase text-[#8b6f3a] mb-2">
-                          {formatDate(item.date)}
-                        </p>
-                        <h3 className="font-serif text-xl md:text-2xl mb-2">{item.title}</h3>
-                        {item.story && (
-                          <p className="text-sm md:text-base text-[#5c4d2e] leading-relaxed font-light whitespace-pre-wrap">
-                            {item.story}
+                        <div className="bg-[#f5f1e8]/80 backdrop-blur-md border border-[#2c2416]/10 p-5 md:p-6 group hover:bg-[#ede5d3]/80 transition">
+                          <p className="text-[10px] md:text-xs tracking-[0.2em] uppercase text-[#8b6f3a] mb-2">
+                            {formatDate(item.date)}
                           </p>
-                        )}
-                        <div className={`mt-4 flex gap-3 text-[10px] md:text-xs tracking-[0.2em] uppercase opacity-0 group-hover:opacity-100 transition ${itemIdx % 2 === 0 ? 'md:justify-end' : ''}`}>
-                          <button
-                            onClick={() => handleEdit(item)}
-                            className="text-[#8b6f3a] hover:text-[#2c2416] transition"
+                          <h3 className="font-serif text-xl md:text-2xl mb-2">{item.title}</h3>
+                          {item.story && (
+                            <p className="text-sm md:text-base text-[#5c4d2e] leading-relaxed font-light whitespace-pre-wrap">
+                              {item.story}
+                            </p>
+                          )}
+
+                          {/* Photo count + expand */}
+                          {photos.length > 0 && !isExpanded && (
+                            <button
+                              onClick={() => setExpandedItem(item.id)}
+                              className={`mt-3 text-xs md:text-sm text-[#8b6f3a] hover:text-[#2c2416] tracking-wide italic transition ${
+                                itemIdx % 2 === 0 ? 'md:ml-auto md:block' : ''
+                              }`}
+                            >
+                              View {photos.length} photo{photos.length === 1 ? '' : 's'} →
+                            </button>
+                          )}
+
+                          {/* Expanded carousel */}
+                          <AnimatePresence>
+                            {isExpanded && (
+                              <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="overflow-hidden text-left"
+                              >
+                                {photos.length > 0 && (
+                                  <PhotoCarousel
+                                    photos={photos}
+                                    onDelete={handleDeletePhoto}
+                                    onCaption={handleCaption}
+                                    onReorder={handleReorder}
+                                  />
+                                )}
+
+                                {quota && quota.remaining > 0 && (
+                                  <div className="mt-4">
+                                    <PhotoUploader
+                                      timelineItemId={item.id}
+                                      onUploaded={fetchAll}
+                                      remaining={quota.remaining}
+                                    />
+                                  </div>
+                                )}
+                                {quota && quota.remaining === 0 && (
+                                  <p className="mt-4 text-xs text-[#c0392b] italic">
+                                    Photo limit reached. Upgrade your plan to add more.
+                                  </p>
+                                )}
+
+                                <button
+                                  onClick={() => setExpandedItem(null)}
+                                  className="mt-3 text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a] hover:text-[#2c2416] transition"
+                                >
+                                  ↑ Collapse
+                                </button>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+
+                          {/* Add photos when none yet */}
+                          {photos.length === 0 && !isExpanded && (
+                            <button
+                              onClick={() => setExpandedItem(item.id)}
+                              className={`mt-3 text-xs md:text-sm text-[#8b6f3a]/70 hover:text-[#8b6f3a] tracking-wide italic transition ${
+                                itemIdx % 2 === 0 ? 'md:ml-auto md:block' : ''
+                              }`}
+                            >
+                              + Add photographs
+                            </button>
+                          )}
+
+                          <div
+                            className={`mt-4 flex gap-3 text-[10px] md:text-xs tracking-[0.2em] uppercase opacity-0 group-hover:opacity-100 transition ${
+                              itemIdx % 2 === 0 ? 'md:justify-end' : ''
+                            }`}
                           >
-                            Edit
-                          </button>
-                          <span className="text-[#2c2416]/30">·</span>
-                          <button
-                            onClick={() => handleDelete(item.id)}
-                            className="text-[#8b6f3a] hover:text-[#c0392b] transition"
-                          >
-                            Delete
-                          </button>
+                            <button
+                              onClick={() => handleEdit(item)}
+                              className="text-[#8b6f3a] hover:text-[#2c2416] transition"
+                            >
+                              Edit
+                            </button>
+                            <span className="text-[#2c2416]/30">·</span>
+                            <button
+                              onClick={() => handleDelete(item.id)}
+                              className="text-[#8b6f3a] hover:text-[#c0392b] transition"
+                            >
+                              Delete
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </motion.div>
-                ))}
+                    </motion.div>
+                  )
+                })}
               </div>
             ))}
           </div>
@@ -302,7 +517,7 @@ export default function Timeline() {
                     <input
                       type="date"
                       value={formData.date}
-                      onChange={e => setFormData({ ...formData, date: e.target.value })}
+                      onChange={(e) => setFormData({ ...formData, date: e.target.value })}
                       required
                       className="w-full bg-transparent border-b border-[#2c2416]/30 focus:border-[#8b6f3a] outline-none py-2 text-base md:text-lg font-serif"
                     />
@@ -315,7 +530,7 @@ export default function Timeline() {
                     <input
                       type="text"
                       value={formData.title}
-                      onChange={e => setFormData({ ...formData, title: e.target.value })}
+                      onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                       required
                       placeholder="The day I..."
                       className="w-full bg-transparent border-b border-[#2c2416]/30 focus:border-[#8b6f3a] outline-none py-2 text-base md:text-lg font-serif"
@@ -324,11 +539,12 @@ export default function Timeline() {
 
                   <div className="mb-6 md:mb-8">
                     <label className="block text-[10px] md:text-xs tracking-[0.2em] uppercase text-[#5c4d2e] mb-2">
-                      Tell the story <span className="text-[#8b6f3a] normal-case tracking-normal">(optional)</span>
+                      Tell the story{' '}
+                      <span className="text-[#8b6f3a] normal-case tracking-normal">(optional)</span>
                     </label>
                     <textarea
                       value={formData.story}
-                      onChange={e => setFormData({ ...formData, story: e.target.value })}
+                      onChange={(e) => setFormData({ ...formData, story: e.target.value })}
                       placeholder="What happened? Who was there? What did it mean to you?"
                       rows={5}
                       className="w-full bg-transparent border border-[#2c2416]/30 focus:border-[#8b6f3a] outline-none p-3 text-sm md:text-base font-light resize-none"
@@ -354,6 +570,17 @@ export default function Timeline() {
                 </form>
               </motion.div>
             </>
+          )}
+        </AnimatePresence>
+
+        {/* Flipbook */}
+        <AnimatePresence>
+          {showFlipbook && flipbookUnlocked && (
+            <Flipbook
+              pages={buildFlipbookPages()}
+              pageTurnStyle={pageTurnStyle}
+              onClose={() => setShowFlipbook(false)}
+            />
           )}
         </AnimatePresence>
       </main>
