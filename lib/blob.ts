@@ -13,10 +13,14 @@ export class BlobNotConfiguredError extends Error {
   }
 }
 
+// Match what @vercel/blob's PutBody actually accepts. We pass File/Blob from
+// our API routes (multipart form uploads), so these are the only types we need.
+export type BlobBody = Blob | File | ReadableStream | string
+
 export interface UploadOptions {
   filename: string
   contentType: string
-  body: Blob | ArrayBuffer | Uint8Array
+  body: BlobBody
 }
 
 export interface UploadResult {
@@ -39,15 +43,19 @@ export async function uploadBlob(opts: UploadOptions): Promise<UploadResult> {
     token: process.env.BLOB_READ_WRITE_TOKEN,
   })
 
+  // Compute size from the input. File/Blob both have .size; strings we
+  // measure by byte length; ReadableStream we can't know without consuming.
+  let size = 0
+  if (opts.body instanceof Blob) {
+    size = opts.body.size
+  } else if (typeof opts.body === 'string') {
+    size = new TextEncoder().encode(opts.body).length
+  }
+
   return {
     url: result.url,
     pathname: result.pathname,
-    size:
-      opts.body instanceof Blob
-        ? opts.body.size
-        : opts.body instanceof ArrayBuffer
-          ? opts.body.byteLength
-          : opts.body.byteLength,
+    size,
   }
 }
 
