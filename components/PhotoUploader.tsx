@@ -32,9 +32,9 @@ export function PhotoUploader({ timelineItemId, onUploaded, remaining }: PhotoUp
       const skipped = list.length - toUpload.length
 
       // Initialize statuses
-      const initial = toUpload.map((f) => ({
+      const initial: UploadStatus[] = toUpload.map((f) => ({
         filename: f.name,
-        state: 'compressing' as const,
+        state: 'compressing',
       }))
       if (skipped > 0) {
         initial.push({
