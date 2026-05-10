@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String?
+  plan          String   @default("basic")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  contacts      Contact[]
+  messages      Message[]
+  arrangements  Arrangement[]
+  timelineItems TimelineItem[]
+  vaultItems    VaultItem[]
+  executor      Executor?
+}
+
+model Contact {
+  id           String   @id @default(cuid())
+  userId       String
+  name         String
+  email        String?
+  phone        String?
+  relationship String?
+  isExecutor   Boolean  @default(false)
+  isBackup     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+model Message {
+  id            String   @id @default(cuid())
+  userId        String
+  recipientName String
+  recipientEmail String?
+  content       String?
+  mediaUrl      String?
+  triggerDate   DateTime?
+  triggerEvent  String?
+  delivered     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id])
+}
+
+model TimelineItem {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime
+  title     String
+  story     String?
+  mediaUrl  String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Arrangement {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  vendor    String
+  contact   String?
+  notes     String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model VaultItem {
+  id            String   @id @default(cuid())
+  userId        String
+  label         String
+  encryptedData String
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id])
+}
+
+model Executor {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  name           String
+  email          String
+  phone          String?
+  verified       Boolean   @default(false)
+  certUploadedAt DateTime?
+  unlockedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  user           User      @relation(fields: [userId], references: [id])
+}
