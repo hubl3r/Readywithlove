@@ -18,6 +18,7 @@ interface Message {
   subject: string | null
   content: string | null
   mediaUrl: string | null
+  mediaBlobPath: string | null
   mediaDurationSec: number | null
   triggerDate: string | null
   state: string
@@ -40,6 +41,8 @@ export function MessageEditor(props: Props) {
     props.mode === 'new' ? props.initialType : 'letter'
   )
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
+  const [mediaBlobPath, setMediaBlobPath] = useState<string | null>(null)
+  const [mediaDurationSec, setMediaDurationSec] = useState<number | null>(null)
 
   // Form fields
   const [recipientName, setRecipientName] = useState('')
@@ -78,6 +81,8 @@ export function MessageEditor(props: Props) {
         setTriggerDate(data.triggerDate ? data.triggerDate.split('T')[0] : '')
         setResolvedType(data.type)
         setMediaUrl(data.mediaUrl)
+        setMediaBlobPath(data.mediaBlobPath)
+        setMediaDurationSec(data.mediaDurationSec)
       })
       .finally(() => setLoading(false))
   }, [props])
@@ -96,6 +101,14 @@ export function MessageEditor(props: Props) {
           triggerDate: triggerDate || null,
           ...extras,
         }
+        // Re-send media metadata when we have it. The VideoRecorder also
+        // PATCHes these after upload, but this is belt-and-suspenders: if
+        // there's any race or the VideoRecorder's PATCH silently failed,
+        // the next save action (Save Draft / Schedule / Send Now) will
+        // also persist what's in local state.
+        if (mediaUrl !== null) payload.mediaUrl = mediaUrl
+        if (mediaBlobPath !== null) payload.mediaBlobPath = mediaBlobPath
+        if (mediaDurationSec !== null) payload.mediaDurationSec = mediaDurationSec
 
         let updated: Message
 
@@ -140,7 +153,7 @@ export function MessageEditor(props: Props) {
         setSaving(false)
       }
     },
-    [id, resolvedType, recipientName, recipientEmail, subject, content, triggerDate]
+    [id, resolvedType, recipientName, recipientEmail, subject, content, triggerDate, mediaUrl, mediaBlobPath, mediaDurationSec]
   )
 
   const schedule = async () => {
@@ -262,11 +275,14 @@ export function MessageEditor(props: Props) {
     }
   }
 
-  const onVideoUploaded = (url: string, _durationSec: number) => {
-    setMediaUrl(url)
-    // durationSec is persisted server-side by VideoRecorder via PATCH; we
-    // don't need to mirror it in local state here.
-    void _durationSec
+  const onVideoUploaded = (info: { url: string; blobPath: string; durationSec: number }) => {
+    // Mirror the metadata in local state so subsequent saves include it.
+    // VideoRecorder also PATCHes these server-side immediately after upload,
+    // but having them in local state means Save Draft / Schedule / Send Now
+    // re-send them defensively.
+    setMediaUrl(info.url)
+    setMediaBlobPath(info.blobPath)
+    setMediaDurationSec(info.durationSec)
   }
 
   // For video mode in "new" state we need to ensure a draft exists before

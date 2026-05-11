@@ -9,7 +9,7 @@ type Stage = 'idle' | 'requesting' | 'live' | 'recording' | 'review' | 'uploadin
 
 interface VideoRecorderProps {
   messageId: string
-  onUploaded: (url: string, durationSec: number) => void
+  onUploaded: (info: { url: string; blobPath: string; durationSec: number }) => void
   initialVideoUrl?: string | null
   maxSeconds?: number
 }
@@ -202,16 +202,24 @@ export function VideoRecorder({
     if (!recordedBlob) return
     setStage('uploading')
     try {
-      const ext = (recordedBlob.type.split('/')[1] || 'webm').split(';')[0]
+      // Strip codec parameters from the MIME type. Browsers (especially Chrome)
+      // report types like 'video/webm; codecs=vp09.00.10.08,opus'. Vercel Blob
+      // does exact-string matching against allowedContentTypes on the server,
+      // so we need to send just 'video/webm' (the base type).
+      const baseMimeType = (recordedBlob.type || 'video/webm').split(';')[0].trim()
+      const ext = (baseMimeType.split('/')[1] || 'webm')
       const filename = `videos/${messageId}/${Date.now()}.${ext}`
 
       const blob = await upload(filename, recordedBlob, {
         access: 'public',
         handleUploadUrl: `/api/messages/${messageId}/upload-url`,
-        contentType: recordedBlob.type,
+        contentType: baseMimeType,
       })
 
-      await fetch(`/api/messages/${messageId}`, {
+      // Persist the URL + metadata on the message row. This is the
+      // primary save path — we don't rely on Vercel's onUploadCompleted
+      // webhook because that doesn't fire reliably from auth-gated routes.
+      const patchRes = await fetch(`/api/messages/${messageId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -220,8 +228,18 @@ export function VideoRecorder({
           mediaDurationSec: seconds,
         }),
       })
+      if (!patchRes.ok) {
+        const errJson = await patchRes.json().catch(() => ({}))
+        throw new Error(
+          `Saved video to storage, but couldn\u2019t link it to your message: ${errJson.error || patchRes.statusText}`
+        )
+      }
 
-      onUploaded(blob.url, seconds)
+      onUploaded({
+        url: blob.url,
+        blobPath: blob.pathname,
+        durationSec: seconds,
+      })
       setStage('done')
     } catch (err) {
       setErrorMsg(`Upload failed: ${(err as Error).message}`)
