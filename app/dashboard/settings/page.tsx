@@ -1,10 +1,9 @@
 // app/dashboard/settings/page.tsx
 'use client'
 
-import { UserButton } from '@clerk/nextjs'
-import Link from 'next/link'
 import { motion } from 'motion/react'
 import { useState, useEffect } from 'react'
+import { AppNav } from '@/components/AppNav'
 
 interface Settings {
   pageTurnStyle: 'fade' | 'curl'
@@ -73,24 +72,7 @@ export default function SettingsPage() {
         }}
       />
 
-      <nav className="relative z-10 flex justify-between items-center px-5 md:px-12 py-5 md:py-8 max-w-[1400px] mx-auto gap-3 border-b border-[#2c2416]/10">
-        <Link href="/" className="flex items-baseline gap-2 md:gap-3 min-w-0 hover:opacity-80 transition">
-          <span className="text-xl md:text-3xl font-serif italic tracking-tight">Ready</span>
-          <span className="h-px w-6 bg-[#2c2416] hidden sm:block"></span>
-          <span className="text-[10px] md:text-xl tracking-[0.2em] md:tracking-[0.3em] uppercase text-[#5c4d2e] truncate">
-            with love
-          </span>
-        </Link>
-        <div className="flex items-center gap-4 md:gap-6">
-          <Link
-            href="/dashboard"
-            className="text-[10px] md:text-sm tracking-widest uppercase hover:text-[#8b6f3a] transition"
-          >
-            ← Dashboard
-          </Link>
-          <UserButton />
-        </div>
-      </nav>
+      <AppNav />
 
       <main className="relative z-10 max-w-[800px] mx-auto px-5 md:px-12 py-10 md:py-16">
         <motion.div

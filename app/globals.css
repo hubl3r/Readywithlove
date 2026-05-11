@@ -3,6 +3,14 @@
 :root {
   --font-serif: var(--font-serif), Georgia, serif;
   --font-sans: var(--font-sans), system-ui, sans-serif;
+
+  /* Brand tokens — referenced from CSS instead of hex literals where it
+     helps high-contrast theming. Existing Tailwind arbitrary values like
+     bg-[#f5f1e8] still work fine; this is here for theme overrides. */
+  --rwl-cream: #f5f1e8;
+  --rwl-deep: #2c2416;
+  --rwl-bronze: #8b6f3a;
+  --rwl-body: #5c4d2e;
 }
 
 .font-serif {
@@ -15,4 +23,58 @@
 
 html {
   scroll-behavior: smooth;
+}
+
+/* === Font scale ====================================================== */
+/* Drives root font-size; Tailwind's `text-*` classes use rem so they
+   inherit this. Components hand-tuned with `text-base` etc. will scale
+   automatically; pixel-exact components won't (intentional). */
+html { font-size: 16px; }
+html[data-font-scale="small"]  { font-size: 14px; }
+html[data-font-scale="normal"] { font-size: 16px; }
+html[data-font-scale="large"]  { font-size: 18px; }
+html[data-font-scale="xlarge"] { font-size: 20px; }
+
+/* === Reduced motion ================================================== */
+html[data-reduced-motion="true"] *,
+html[data-reduced-motion="true"] *::before,
+html[data-reduced-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* === High contrast =================================================== */
+/* Stronger ink, deeper bronze, bolder edges. We do this with CSS variable
+   overrides AND a few rules that nudge low-opacity elements up to readable
+   strength. */
+html[data-high-contrast="true"] {
+  --rwl-cream: #ffffff;
+  --rwl-deep: #000000;
+  --rwl-bronze: #5c4520;
+  --rwl-body: #1a1a1a;
+}
+
+html[data-high-contrast="true"] body {
+  background-color: var(--rwl-cream) !important;
+  color: var(--rwl-deep) !important;
+}
+
+/* Boost low-opacity borders, dividers, and muted text into legible range. */
+html[data-high-contrast="true"] [class*="opacity-"] {
+  opacity: 1 !important;
+}
+html[data-high-contrast="true"] [class*="border-[#2c2416]/"],
+html[data-high-contrast="true"] [class*="border-[#2c2416]\\/"] {
+  border-color: var(--rwl-deep) !important;
+}
+
+/* Honor system-level prefs even without our toggle (good a11y baseline). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

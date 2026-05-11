@@ -14,16 +14,27 @@ model User {
   email         String   @unique
   name          String?
   plan          String   @default("basic") // basic | advanced | premium
+
+  // Death-state lifecycle (full verification flow lands in Zip 3 / Executor).
+  // pendingDeathVerificationAt is set when an executor uploads a death cert.
+  // deceasedAt flips after verification + grace period passes.
+  // For Zip 2a these fields exist but the cron only reads `deceasedAt`.
+  pendingDeathVerificationAt DateTime?
+  deceasedAt                 DateTime?
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-  contacts      Contact[]
-  messages      Message[]
-  arrangements  Arrangement[]
-  timelineItems TimelineItem[]
-  vaultItems    VaultItem[]
-  executor      Executor?
-  photos        Photo[]
-  settings      Settings?
+
+  contacts        Contact[]
+  messages        Message[]
+  arrangements    Arrangement[]
+  timelineItems   TimelineItem[]
+  vaultItems      VaultItem[]
+  executor        Executor?
+  photos          Photo[]
+  settings        Settings?
+  messageInvites  MessageInvite[]
+  contributions   Contribution[]
 }
 
 model Contact {
@@ -39,18 +50,94 @@ model Contact {
   user         User     @relation(fields: [userId], references: [id])
 }
 
+// Messages the user is leaving for someone else. State machine:
+//   drafting          -> being written, never sent
+//   scheduled         -> queued, waiting for triggerDate
+//   pending_approval  -> trigger arrived while user alive; awaiting approve/postpone/cancel
+//   sent              -> delivered to recipient (terminal until restored)
+//   postponed         -> rescheduled by user; goes back to scheduled on save
+//   archived          -> canceled by user or auto-archived; resurrectable
 model Message {
-  id            String   @id @default(cuid())
-  userId        String
-  recipientName String
-  recipientEmail String?
-  content       String?
-  mediaUrl      String?
-  triggerDate   DateTime?
-  triggerEvent  String?
-  delivered     Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  user          User     @relation(fields: [userId], references: [id])
+  id              String    @id @default(cuid())
+  userId          String
+
+  // Recipient
+  recipientName   String
+  recipientEmail  String?
+
+  // Content
+  type            String    @default("letter")  // letter | video
+  subject         String?
+  content         String?                       // letter body, plain text
+  mediaUrl        String?                       // video URL when type=video
+  mediaBlobPath   String?                       // for deletion from Blob
+  mediaDurationSec Int?
+
+  // Delivery
+  triggerDate     DateTime?
+  state           String    @default("drafting") // see comment above
+  approvalPromptedAt DateTime?                   // when we first asked user "is this still ok?"
+  approvalExpiresAt  DateTime?                   // 14 days after promptedAt
+  sentAt          DateTime?
+  archivedAt      DateTime?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  user            User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([state, triggerDate])
+}
+
+// An invite for a friend/family member to contribute memories to a user's account.
+// Token-based, no Clerk account needed for contributors. 30-day expiry.
+model MessageInvite {
+  id              String    @id @default(cuid())
+  userId          String
+  token           String    @unique
+  contributorName String
+  contributorEmail String?
+  message         String?   // optional personal note from user
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  lastUsedAt      DateTime?
+  useCount        Int       @default(0)
+  createdAt       DateTime  @default(now())
+  user            User      @relation(fields: [userId], references: [id])
+  contributions   Contribution[]
+
+  @@index([userId])
+  @@index([token])
+}
+
+// A memory contributed by an invited person. Tied to invite token, owned by
+// the user. The contributor's identity is captured at submission time.
+model Contribution {
+  id              String    @id @default(cuid())
+  userId          String                     // who receives this contribution
+  inviteId        String
+
+  // Captured from the contributor
+  contributorName String
+  contributorNote String?                    // their personal message to user
+
+  // Content
+  type            String                     // letter | video | photo
+  content         String?
+  mediaUrl        String?
+  mediaBlobPath   String?
+
+  // Lifecycle
+  viewedByUser    Boolean   @default(false)
+  importedToTimelineItemId String?            // if user imported to timeline
+  archivedAt      DateTime?
+
+  createdAt       DateTime  @default(now())
+  user            User      @relation(fields: [userId], references: [id])
+  invite          MessageInvite @relation(fields: [inviteId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([inviteId])
 }
 
 model TimelineItem {
@@ -71,7 +158,7 @@ model Photo {
   timelineItemId String?
   url            String
   thumbnailUrl   String?
-  blobPath       String        // path in Vercel Blob, used for deletion
+  blobPath       String
   caption        String?
   width          Int?
   height         Int?
@@ -121,8 +208,8 @@ model Executor {
 model Settings {
   id              String   @id @default(cuid())
   userId          String   @unique
-  pageTurnStyle   String   @default("fade")    // fade | curl
-  fontScale       String   @default("normal")  // small | normal | large | xlarge
+  pageTurnStyle   String   @default("fade")
+  fontScale       String   @default("normal")
   highContrast    Boolean  @default(false)
   ttsEnabled      Boolean  @default(false)
   sttEnabled      Boolean  @default(false)

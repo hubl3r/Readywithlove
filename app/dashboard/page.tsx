@@ -1,10 +1,11 @@
 // app/dashboard/page.tsx
 'use client'
 
-import { UserButton, useUser } from '@clerk/nextjs'
+import { useUser } from '@clerk/nextjs'
 import Link from 'next/link'
 import { motion } from 'motion/react'
 import { useState, useEffect } from 'react'
+import { AppNav } from '@/components/AppNav'
 
 interface Stats {
   timelineCount: number
@@ -105,8 +106,8 @@ export default function Dashboard() {
       {/* Subtle animated background */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
         <motion.div
-          animate={{ 
-            x: [0, 200, -50, 100, 0], 
+          animate={{
+            x: [0, 200, -50, 100, 0],
             y: [0, 150, 200, 50, 0],
             scale: [1, 1.3, 0.95, 1.1, 1],
           }}
@@ -118,8 +119,8 @@ export default function Dashboard() {
           }}
         />
         <motion.div
-          animate={{ 
-            x: [0, -150, 50, -100, 0], 
+          animate={{
+            x: [0, -150, 50, -100, 0],
             y: [0, 200, -50, 150, 0],
           }}
           transition={{ duration: 60, repeat: Infinity, ease: "easeInOut" }}
@@ -136,20 +137,7 @@ export default function Dashboard() {
         backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`
       }}/>
 
-      {/* Navigation */}
-      <nav className="relative z-10 flex justify-between items-center px-5 md:px-12 py-5 md:py-8 max-w-[1400px] mx-auto gap-3 border-b border-[#2c2416]/10">
-        <Link href="/" className="flex items-baseline gap-2 md:gap-3 min-w-0 hover:opacity-80 transition">
-          <span className="text-xl md:text-3xl font-serif italic tracking-tight">Ready</span>
-          <span className="h-px w-6 bg-[#2c2416] hidden sm:block"></span>
-          <span className="text-[10px] md:text-xl tracking-[0.2em] md:tracking-[0.3em] uppercase text-[#5c4d2e] truncate">with love</span>
-        </Link>
-        <div className="flex items-center gap-4 md:gap-6">
-          <Link href="/" className="text-[10px] md:text-sm tracking-widest uppercase hover:text-[#8b6f3a] transition hidden sm:block">
-            Home
-          </Link>
-          <UserButton />
-        </div>
-      </nav>
+      <AppNav />
 
       {/* Welcome */}
       <main className="relative z-10 max-w-[1400px] mx-auto px-5 md:px-12 py-10 md:py-16">
@@ -218,11 +206,11 @@ export default function Dashboard() {
           <div className="col-span-12 md:col-span-7">
             <div className="bg-[#2c2416] text-[#f5f1e8] p-6 md:p-10 h-full flex flex-col justify-between min-h-[300px]">
               <div>
-                <p className="text-[10px] md:text-xs tracking-[0.3em] uppercase text-[#8b6f3a] mb-3 md:mb-4">Today's prompt</p>
+                <p className="text-[10px] md:text-xs tracking-[0.3em] uppercase text-[#8b6f3a] mb-3 md:mb-4">Today&apos;s prompt</p>
                 <p className="font-serif text-2xl md:text-4xl italic leading-snug mb-4 md:mb-6">
-                  "What's one piece of advice<br/>
-                  you wish you'd received<br/>
-                  when you were younger?"
+                  &ldquo;What&apos;s one piece of advice<br/>
+                  you wish you&apos;d received<br/>
+                  when you were younger?&rdquo;
                 </p>
                 <p className="text-sm md:text-base text-[#f5f1e8]/70 font-light leading-relaxed max-w-md">
                   Take two minutes. Add it to your timeline as a voice note, video, or written reflection. Future generations will thank you.
@@ -263,7 +251,7 @@ export default function Dashboard() {
                 onMouseEnter={() => setHoveredCard(i)}
                 onMouseLeave={() => setHoveredCard(null)}
               >
-                <Link 
+                <Link
                   href={section.href}
                   className="block bg-[#f5f1e8] hover:bg-[#ede5d3] transition p-6 md:p-10 h-full group relative overflow-hidden"
                 >
@@ -301,8 +289,8 @@ export default function Dashboard() {
           className="mt-16 md:mt-24 mb-8 md:mb-16 text-center"
         >
           <p className="font-serif text-xl md:text-3xl italic text-[#5c4d2e] max-w-3xl mx-auto px-5">
-            "Every word you record today is a gift wrapped<br className="hidden md:block"/>
-            for someone yet to open it."
+            &ldquo;Every word you record today is a gift wrapped<br className="hidden md:block"/>
+            for someone yet to open it.&rdquo;
           </p>
         </motion.div>
       </main>

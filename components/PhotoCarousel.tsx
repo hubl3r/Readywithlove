@@ -20,6 +20,11 @@ interface PhotoCarouselProps {
   onReorder: (ids: string[]) => void
 }
 
+// Locked aspect ratio for the frame. 4:3 reads as classic photograph;
+// portraits get letterboxed against a blurred version of themselves so the
+// frame never bounces and portraits don't feel cramped.
+const FRAME_ASPECT = 4 / 3
+
 export function PhotoCarousel({ photos, onDelete, onCaption, onReorder }: PhotoCarouselProps) {
   const [active, setActive] = useState(0)
   const [editingCaption, setEditingCaption] = useState(false)
@@ -55,38 +60,62 @@ export function PhotoCarousel({ photos, onDelete, onCaption, onReorder }: PhotoC
 
   return (
     <div className="mt-4">
-      {/* Main image */}
-      <div className="relative bg-[#2c2416]/5 border border-[#2c2416]/10 overflow-hidden">
+      {/* Locked-aspect frame */}
+      <div
+        className="relative bg-[#2c2416]/5 border border-[#2c2416]/10 overflow-hidden"
+        style={{ aspectRatio: FRAME_ASPECT }}
+      >
         <AnimatePresence mode="wait">
-          <motion.img
+          <motion.div
             key={photo.id}
-            src={photo.url}
-            alt={photo.caption || ''}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
-            className="w-full max-h-[60vh] object-contain bg-[#f5f1e8]"
-          />
+            className="absolute inset-0"
+          >
+            {/* Blurred backdrop — same image stretched + blurred, fills the frame
+                so portrait photos don't show empty bars. Eyes are drawn to the
+                centered, in-focus version on top. */}
+            <div
+              aria-hidden="true"
+              className="absolute inset-0 bg-cover bg-center"
+              style={{
+                backgroundImage: `url("${photo.url}")`,
+                filter: 'blur(28px) brightness(0.85) saturate(0.9)',
+                transform: 'scale(1.1)', // hides blur edge bleed
+              }}
+            />
+            {/* Subtle warm wash so the cream theme stays cohesive over dark photos */}
+            <div className="absolute inset-0 bg-[#2c2416]/15" aria-hidden="true" />
+
+            {/* The actual photo, contained within the frame */}
+            <img
+              src={photo.url}
+              alt={photo.caption || ''}
+              className="absolute inset-0 w-full h-full object-contain"
+              loading="lazy"
+            />
+          </motion.div>
         </AnimatePresence>
 
         {photos.length > 1 && (
           <>
             <button
               onClick={() => move(-1)}
-              className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 md:w-10 md:h-10 rounded-full bg-[#f5f1e8]/90 hover:bg-[#f5f1e8] border border-[#2c2416]/20 flex items-center justify-center text-[#2c2416] transition"
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 md:w-10 md:h-10 rounded-full bg-[#f5f1e8]/90 hover:bg-[#f5f1e8] border border-[#2c2416]/20 flex items-center justify-center text-[#2c2416] transition z-10"
               aria-label="Previous photo"
             >
               ‹
             </button>
             <button
               onClick={() => move(1)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 md:w-10 md:h-10 rounded-full bg-[#f5f1e8]/90 hover:bg-[#f5f1e8] border border-[#2c2416]/20 flex items-center justify-center text-[#2c2416] transition"
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 md:w-10 md:h-10 rounded-full bg-[#f5f1e8]/90 hover:bg-[#f5f1e8] border border-[#2c2416]/20 flex items-center justify-center text-[#2c2416] transition z-10"
               aria-label="Next photo"
             >
               ›
             </button>
-            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1.5 bg-[#f5f1e8]/80 backdrop-blur-sm px-2 py-1 rounded-full">
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1.5 bg-[#f5f1e8]/85 backdrop-blur-sm px-2 py-1 rounded-full z-10">
               {photos.map((_, i) => (
                 <button
                   key={i}
@@ -94,8 +123,8 @@ export function PhotoCarousel({ photos, onDelete, onCaption, onReorder }: PhotoC
                     setActive(i)
                     setEditingCaption(false)
                   }}
-                  className={`w-1.5 h-1.5 rounded-full transition ${
-                    i === active ? 'bg-[#2c2416] w-4' : 'bg-[#2c2416]/30'
+                  className={`h-1.5 rounded-full transition ${
+                    i === active ? 'bg-[#2c2416] w-4' : 'bg-[#2c2416]/30 w-1.5'
                   }`}
                   aria-label={`Photo ${i + 1}`}
                 />

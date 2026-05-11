@@ -1,6 +1,8 @@
+// app/layout.tsx
 import type { Metadata } from "next"
 import { ClerkProvider } from '@clerk/nextjs'
 import { Cormorant_Garamond, Inter } from 'next/font/google'
+import { SettingsProvider } from '@/components/SettingsProvider'
 import "./globals.css"
 
 const cormorant = Cormorant_Garamond({
@@ -27,9 +29,10 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider>
-      <html lang="en" className={`${cormorant.variable} ${inter.variable}`}>
+      {/* data-scroll-behavior fixes Next.js warning about smooth scroll on route changes */}
+      <html lang="en" className={`${cormorant.variable} ${inter.variable}`} data-scroll-behavior="smooth">
         <body className="antialiased font-sans">
-          {children}
+          <SettingsProvider>{children}</SettingsProvider>
         </body>
       </html>
     </ClerkProvider>
