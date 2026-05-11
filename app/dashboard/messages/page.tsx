@@ -6,6 +6,7 @@ import { motion } from 'motion/react'
 import { useState, useEffect } from 'react'
 import { AppNav } from '@/components/AppNav'
 import { STATE_LABELS, type MessageState } from '@/lib/messageHelpers'
+import { formatMediumDate } from '@/lib/dateFormat'
 
 interface MessageRow {
   id: string
@@ -214,13 +215,7 @@ function Section({
 
 function MessageCard({ m }: { m: MessageRow }) {
   const label = STATE_LABELS[m.state]
-  const trigger = m.triggerDate
-    ? new Date(m.triggerDate).toLocaleDateString('en-US', {
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-      })
-    : null
+  const trigger = m.triggerDate ? formatMediumDate(m.triggerDate) : null
 
   // Build a meaningful title:
   // 1. "To [Name]" if recipient set

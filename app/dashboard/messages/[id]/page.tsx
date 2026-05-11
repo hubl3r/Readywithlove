@@ -8,6 +8,7 @@ import { motion } from 'motion/react'
 import { AppNav } from '@/components/AppNav'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { STATE_LABELS, type MessageState } from '@/lib/messageHelpers'
+import { formatLongDate } from '@/lib/dateFormat'
 
 interface Message {
   id: string
@@ -115,14 +116,7 @@ function Inner() {
   }
 
   const label = STATE_LABELS[msg.state]
-  const trigger = msg.triggerDate
-    ? new Date(msg.triggerDate).toLocaleDateString('en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      })
-    : null
+  const trigger = msg.triggerDate ? formatLongDate(msg.triggerDate) : null
 
   return (
     <div className="min-h-screen bg-[#f5f1e8] text-[#2c2416] relative overflow-x-hidden">

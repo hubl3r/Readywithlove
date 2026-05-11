@@ -9,6 +9,7 @@ import { AppNav } from '@/components/AppNav'
 import { LetterEditor } from '@/components/LetterEditor'
 import { VideoRecorder } from '@/components/VideoRecorder'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { formatLongDate } from '@/lib/dateFormat'
 
 interface Message {
   id: string
@@ -27,6 +28,27 @@ interface Message {
 type Props =
   | { mode: 'new'; initialType: 'letter' | 'video'; messageId?: undefined }
   | { mode: 'edit'; messageId: string; initialType?: undefined }
+
+// Snapshot a set of form values into a single comparable string. Used to
+// detect "has anything changed since the last save". The order here must
+// stay stable.
+function buildSnapshot(
+  recipientName: string,
+  recipientEmail: string,
+  subject: string,
+  content: string,
+  triggerDate: string,
+  mediaUrl: string | null
+): string {
+  return JSON.stringify({
+    recipientName,
+    recipientEmail,
+    subject,
+    content,
+    triggerDate,
+    mediaUrl,
+  })
+}
 
 export function MessageEditor(props: Props) {
   const router = useRouter()
@@ -66,6 +88,14 @@ export function MessageEditor(props: Props) {
   // unwanted empty rows don't pile up.
   const [shouldDeleteOnCancel, setShouldDeleteOnCancel] = useState(false)
 
+  // Snapshot of form values at the moment of last successful save (or
+  // initial fetch). Used by the "back to shoebox" check — if the snapshot
+  // matches the current state, nothing has changed since the last save,
+  // so we don't prompt. Empty string = no snapshot yet (new message that
+  // hasn't been saved). The dialog logic treats an empty snapshot as
+  // "user has nothing to save" only when the form is also empty.
+  const [savedSnapshot, setSavedSnapshot] = useState<string>('')
+
   // Fetch existing message in edit mode
   useEffect(() => {
     if (props.mode !== 'edit') return
@@ -83,6 +113,17 @@ export function MessageEditor(props: Props) {
         setMediaUrl(data.mediaUrl)
         setMediaBlobPath(data.mediaBlobPath)
         setMediaDurationSec(data.mediaDurationSec)
+        // Snapshot what's on the server so we can detect future changes
+        setSavedSnapshot(
+          buildSnapshot(
+            data.recipientName ?? '',
+            data.recipientEmail ?? '',
+            data.subject ?? '',
+            data.content ?? '',
+            data.triggerDate ? data.triggerDate.split('T')[0] : '',
+            data.mediaUrl
+          )
+        )
       })
       .finally(() => setLoading(false))
   }, [props])
@@ -145,6 +186,18 @@ export function MessageEditor(props: Props) {
         // The user just saved — this is now a real draft, not a provisional
         // one. Don't delete it if they later cancel or navigate away.
         setShouldDeleteOnCancel(false)
+        // Snapshot the just-saved state so the back-to-shoebox check
+        // doesn't prompt to save again right after a save.
+        setSavedSnapshot(
+          buildSnapshot(
+            recipientName,
+            recipientEmail,
+            subject,
+            content,
+            triggerDate,
+            mediaUrl
+          )
+        )
         return updated
       } catch (err) {
         setError((err as Error).message)
@@ -217,13 +270,25 @@ export function MessageEditor(props: Props) {
   // Existing scheduled/sent/archived messages always navigate without
   // confirmation — those aren't drafts and editing here doesn't risk losing
   // them; only the in-flight unsaved edits would be lost.
-  const hasContent = !!(
+  const hasAnyContent = !!(
     recipientName ||
     recipientEmail ||
     subject ||
     content ||
     mediaUrl
   )
+  // Has anything changed since the last successful save? If the user just
+  // saved, the current state matches the snapshot and we don't prompt them
+  // to save again. The "back to shoebox" check uses this.
+  const currentSnapshot = buildSnapshot(
+    recipientName,
+    recipientEmail,
+    subject,
+    content,
+    triggerDate,
+    mediaUrl
+  )
+  const hasUnsavedChanges = currentSnapshot !== savedSnapshot && hasAnyContent
   const hasProvisionalDraft = shouldDeleteOnCancel && !!id
 
   // Helper that performs the actual cleanup + navigation
@@ -245,11 +310,11 @@ export function MessageEditor(props: Props) {
 
   // Cancel button click — "discard or keep editing"
   const onCancelClick = () => {
-    if (hasContent || hasProvisionalDraft) {
+    if (hasUnsavedChanges || hasProvisionalDraft) {
       setAskCancel(true)
     } else {
-      // Nothing to lose — just navigate. (Note: existing scheduled/sent
-      // messages also fall here when no edits have been made.)
+      // Nothing to lose — just navigate. (Includes the case where the user
+      // saved and then clicked Cancel without further edits.)
       router.push('/dashboard/messages')
     }
   }
@@ -257,7 +322,7 @@ export function MessageEditor(props: Props) {
   // Back-to-shoebox click — "save / discard / keep editing"
   const onBackClick = (e: React.MouseEvent) => {
     e.preventDefault()
-    if (hasContent || hasProvisionalDraft) {
+    if (hasUnsavedChanges || hasProvisionalDraft) {
       setAskExit(true)
     } else {
       router.push('/dashboard/messages')
@@ -417,13 +482,24 @@ export function MessageEditor(props: Props) {
         </Field>
 
         <Field label="When should it be delivered?" hint="We&rsquo;ll ask you to confirm on this day.">
-          <input
-            type="date"
-            value={triggerDate}
-            min={today}
-            onChange={(e) => setTriggerDate(e.target.value)}
-            className="bg-transparent border-b border-[#2c2416]/30 focus:border-[#8b6f3a] outline-none py-2 text-base md:text-lg font-serif"
-          />
+          <div className="relative inline-block">
+            <input
+              type="date"
+              value={triggerDate}
+              min={today}
+              onChange={(e) => setTriggerDate(e.target.value)}
+              className="bg-[#f5f1e8]/60 border border-[#2c2416]/30 hover:border-[#2c2416]/60 focus:border-[#8b6f3a] outline-none px-4 py-3 pr-10 text-base md:text-lg font-serif text-[#2c2416] cursor-pointer min-w-[180px] transition"
+              aria-label="Delivery date"
+            />
+            <span aria-hidden="true" className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8b6f3a] pointer-events-none text-lg">
+              ⌗
+            </span>
+          </div>
+          {triggerDate && (
+            <p className="mt-2 font-serif italic text-[#5c4d2e]">
+              {formatLongDate(triggerDate)}
+            </p>
+          )}
         </Field>
 
         {error && <p className="mt-4 text-sm text-[#c0392b] italic">{error}</p>}
@@ -441,7 +517,14 @@ export function MessageEditor(props: Props) {
             Cancel
           </button>
           <button
-            onClick={() => save()}
+            onClick={async () => {
+              try {
+                await save()
+                router.push('/dashboard/messages')
+              } catch {
+                // error shown via setError; stay on page
+              }
+            }}
             disabled={saving}
             className="px-5 md:px-6 py-3 md:py-4 border border-[#2c2416] hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs md:text-sm tracking-[0.2em] uppercase disabled:opacity-50"
           >
