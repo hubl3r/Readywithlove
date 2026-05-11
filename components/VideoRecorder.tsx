@@ -17,13 +17,22 @@ interface VideoRecorderProps {
 const DEFAULT_MAX_SECONDS = 10 * 60
 
 /**
- * MediaRecorder-based video recorder with:
- *   - Always-rendered <video> element (fixes a race where srcObject was set
- *     on a not-yet-mounted ref). Crucially, this is what makes the live
- *     preview actually show DURING recording on iOS Safari too.
- *   - playsInline + muted on the self-view (required for iOS autoplay)
- *   - Accept / Redo flow on review, persistent "Record again" after upload
- *   - Vercel Blob direct client upload (bypasses Vercel's 4.5MB function limit)
+ * MediaRecorder-based video recorder.
+ *
+ * Design notes (Zip 2b.3):
+ *   - No resolution constraints on getUserMedia. Phones (iPhone especially)
+ *     zoom in heavily when given a target width/height because they crop
+ *     from a much larger native sensor. Letting the device pick its native
+ *     preview avoids the "arm's-length to fit my head" problem.
+ *   - Recording container aspect ratio is measured from the actual stream
+ *     once playing, so portrait phone footage gets a portrait frame and
+ *     landscape footage gets a landscape frame. No more letterboxing.
+ *   - Stop button floats over the video during recording so it's always
+ *     reachable in one tap, even on small screens / landscape phone where
+ *     the natural form-fill puts the controls below the fold.
+ *   - Live + review elements always mounted so srcObject attaches reliably
+ *     (the previous race-condition fix from Zip 2b.1).
+ *   - max-h on the surface keeps controls visible without scrolling.
  */
 export function VideoRecorder({
   messageId,
@@ -36,8 +45,10 @@ export function VideoRecorder({
   const [seconds, setSeconds] = useState(0)
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(initialVideoUrl ?? null)
+  // Measured aspect ratio of the active stream/recording (width / height).
+  // Falls back to 16:9 until we have real numbers.
+  const [aspectRatio, setAspectRatio] = useState<number>(16 / 9)
 
-  // Both surfaces are always rendered now; we toggle which is visible via CSS.
   const liveVideoRef = useRef<HTMLVideoElement | null>(null)
   const reviewVideoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -55,7 +66,6 @@ export function VideoRecorder({
     }
   }, [])
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopCamera()
@@ -70,20 +80,19 @@ export function VideoRecorder({
     setErrorMsg(null)
     setStage('requesting')
     try {
+      // No width/height/frameRate constraints — let the device pick its
+      // native preview. This is the fix for the iPhone over-zoom issue.
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        video: { facingMode: 'user' },
         audio: true,
       })
       streamRef.current = stream
-      // Element is always rendered, so the ref is real. Attach immediately.
       if (liveVideoRef.current) {
         liveVideoRef.current.srcObject = stream
-        // iOS quirk: play() may need to be awaited explicitly, and may
-        // return a rejected promise even after autoplay. Swallow gracefully.
         try {
           await liveVideoRef.current.play()
         } catch {
-          // Element will still display the stream; play state is best-effort
+          // best-effort
         }
       }
       setStage('live')
@@ -100,17 +109,34 @@ export function VideoRecorder({
     }
   }
 
+  // Update aspectRatio when the live video reports its actual dimensions
+  const handleLiveMetadata = () => {
+    const el = liveVideoRef.current
+    if (!el) return
+    if (el.videoWidth > 0 && el.videoHeight > 0) {
+      setAspectRatio(el.videoWidth / el.videoHeight)
+    }
+  }
+  // Same for the recorded preview (in case the saved video is a different
+  // orientation than what we measured live — e.g. user rotated mid-recording)
+  const handleReviewMetadata = () => {
+    const el = reviewVideoRef.current
+    if (!el) return
+    if (el.videoWidth > 0 && el.videoHeight > 0) {
+      setAspectRatio(el.videoWidth / el.videoHeight)
+    }
+  }
+
   const startRecording = () => {
     if (!streamRef.current) return
     chunksRef.current = []
     setSeconds(0)
 
-    // Pick the best supported MIME type; browsers vary.
     const candidates = [
       'video/webm;codecs=vp9,opus',
       'video/webm;codecs=vp8,opus',
       'video/webm',
-      'video/mp4', // iOS Safari produces this
+      'video/mp4',
     ]
     const mime = candidates.find((m) => MediaRecorder.isTypeSupported(m)) ?? ''
 
@@ -168,8 +194,6 @@ export function VideoRecorder({
         contentType: recordedBlob.type,
       })
 
-      // Fallback for localhost (onUploadCompleted server callback doesn't
-      // fire there): PATCH the message with the URL directly.
       await fetch(`/api/messages/${messageId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -194,22 +218,35 @@ export function VideoRecorder({
     return `${m}:${r.toString().padStart(2, '0')}`
   }
 
-  // Which surface to show. Done if it's idle, the LIVE element is rendered
-  // but hidden (camera not started). Same in 'requesting'. Review/done show
-  // the recorded preview.
   const showLive = stage === 'requesting' || stage === 'live' || stage === 'recording'
   const showReview = stage === 'review' || stage === 'done' || stage === 'uploading'
 
+  // Frame styling:
+  //   - aspectRatio is measured from the actual stream
+  //   - max-h-[60vh] keeps the controls visible without scrolling, even
+  //     when the user holds a phone in landscape (where a wide aspect ratio
+  //     would otherwise want to take the whole height)
+  //   - For portrait video on desktop, max-w prevents a giant tall column
+  const frameStyle: React.CSSProperties = {
+    aspectRatio: `${aspectRatio}`,
+    maxHeight: '60vh',
+    maxWidth: aspectRatio < 1 ? '420px' : undefined, // cap portrait width
+    margin: '0 auto', // center when narrower than container
+  }
+
   return (
     <div className="w-full">
-      {/* Video surface — both elements always mounted; visibility toggled */}
-      <div className="relative aspect-video bg-black overflow-hidden border border-[#2c2416]/20">
+      <div
+        className="relative bg-black overflow-hidden border border-[#2c2416]/20"
+        style={frameStyle}
+      >
         <video
           ref={liveVideoRef}
           autoPlay
           playsInline
           muted
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity ${
+          onLoadedMetadata={handleLiveMetadata}
+          className={`absolute inset-0 w-full h-full object-contain transition-opacity ${
             showLive ? 'opacity-100' : 'opacity-0 pointer-events-none'
           }`}
         />
@@ -219,20 +256,22 @@ export function VideoRecorder({
             src={previewUrl}
             controls
             playsInline
+            onLoadedMetadata={handleReviewMetadata}
             className="absolute inset-0 w-full h-full object-contain bg-black"
           />
         )}
         {stage === 'idle' && (
-          <div className="absolute inset-0 flex items-center justify-center text-[#f5f1e8]/60 italic font-serif text-lg">
+          <div className="absolute inset-0 flex items-center justify-center text-[#f5f1e8]/60 italic font-serif text-base md:text-lg px-4 text-center">
             Camera will appear here
           </div>
         )}
         {stage === 'requesting' && (
-          <div className="absolute inset-0 flex items-center justify-center text-[#f5f1e8]/80 italic font-serif">
+          <div className="absolute inset-0 flex items-center justify-center text-[#f5f1e8]/80 italic font-serif px-4 text-center">
             Asking your browser for camera access…
           </div>
         )}
 
+        {/* REC badge */}
         <AnimatePresence>
           {stage === 'recording' && (
             <motion.div
@@ -250,9 +289,27 @@ export function VideoRecorder({
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Floating Stop button — overlay so users on small screens can
+            stop without scrolling */}
+        <AnimatePresence>
+          {stage === 'recording' && (
+            <motion.button
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              onClick={stopRecording}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 w-14 h-14 md:w-16 md:h-16 rounded-full bg-[#c0392b] hover:bg-[#a13322] active:bg-[#a13322] transition flex items-center justify-center shadow-2xl ring-4 ring-[#f5f1e8]/80 z-10"
+              aria-label="Stop recording"
+            >
+              <span className="block w-5 h-5 md:w-6 md:h-6 bg-[#f5f1e8]" />
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Controls */}
+      {/* Controls below the surface — also available, just not the only way
+          to stop a recording on a tiny screen */}
       <div className="mt-4 flex flex-wrap gap-3">
         {stage === 'idle' && (
           <button
