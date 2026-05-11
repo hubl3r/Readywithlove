@@ -517,7 +517,7 @@ function VideoModeWrapper({
   ensureDraftId: () => Promise<string | null>
   messageId: string | null
   initialUrl: string | null
-  onUploaded: (url: string, durationSec: number) => void
+  onUploaded: (info: { url: string; blobPath: string; durationSec: number }) => void
 }) {
   const [resolvedId, setResolvedId] = useState<string | null>(messageId)
   const [resolving, setResolving] = useState(false)
