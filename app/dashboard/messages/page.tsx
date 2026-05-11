@@ -3,7 +3,8 @@
 
 import Link from 'next/link'
 import { motion } from 'motion/react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { AppNav } from '@/components/AppNav'
 import { STATE_LABELS, type MessageState } from '@/lib/messageHelpers'
 import { formatMediumDate } from '@/lib/dateFormat'
@@ -27,10 +28,43 @@ interface MessageRow {
 
 type TabKey = 'leaving' | 'received'
 
+// Page-level Suspense wrapper: Next.js requires it for useSearchParams() in
+// client components so the static prerender boundary is clear.
 export default function MessagesPage() {
-  const [tab, setTab] = useState<TabKey>('leaving')
+  return (
+    <Suspense fallback={<MessagesFallback />}>
+      <MessagesInner />
+    </Suspense>
+  )
+}
+
+function MessagesFallback() {
+  return (
+    <div className="min-h-screen bg-[#f5f1e8] text-[#2c2416]">
+      <AppNav />
+      <main className="relative z-10 max-w-[1100px] mx-auto px-5 md:px-12 py-10 md:py-16">
+        <p className="font-serif italic text-[#5c4d2e]">Loading your shoebox…</p>
+      </main>
+    </div>
+  )
+}
+
+function MessagesInner() {
+  const searchParams = useSearchParams()
+  // ?tab=received → land on "From others" (used by the Contributions nav link)
+  const initialTab: TabKey =
+    searchParams.get('tab') === 'received' ? 'received' : 'leaving'
+
+  const [tab, setTab] = useState<TabKey>(initialTab)
   const [messages, setMessages] = useState<MessageRow[]>([])
   const [loading, setLoading] = useState(true)
+
+  // If the query param changes (e.g. user clicks Contributions in nav while
+  // already on this page), sync the tab state.
+  useEffect(() => {
+    const nextTab = searchParams.get('tab') === 'received' ? 'received' : 'leaving'
+    setTab(nextTab)
+  }, [searchParams])
 
   useEffect(() => {
     fetch('/api/messages')
@@ -122,11 +156,7 @@ export default function MessagesPage() {
         </div>
 
         {tab === 'received' ? (
-          <p className="font-serif italic text-[#5c4d2e] text-base md:text-lg">
-            When you invite loved ones to share memories, their contributions
-            will appear here.{' '}
-            <span className="text-[#8b6f3a]/70">— coming in the next update.</span>
-          </p>
+          <ReceivedPlaceholder />
         ) : loading ? (
           <p className="font-serif italic text-[#5c4d2e]">Loading your shoebox…</p>
         ) : messages.length === 0 ? (
@@ -141,6 +171,47 @@ export default function MessagesPage() {
           </div>
         )}
       </main>
+    </div>
+  )
+}
+
+/**
+ * Placeholder for the From-others tab — Zip 2c.1 ships the invite-creation
+ * and contribution-collection flow, but the feed of received contributions
+ * lands in Zip 2c.2. For now we point at the invite-management page so the
+ * user can start gathering memories even before the consumer view exists.
+ */
+function ReceivedPlaceholder() {
+  return (
+    <div className="space-y-8 md:space-y-10">
+      <p className="font-serif italic text-[#5c4d2e] text-base md:text-lg max-w-2xl">
+        Invite loved ones to share a memory, a story, or a few words you can
+        carry forward. Their contributions will appear here.
+      </p>
+
+      <div className="border border-[#2c2416]/15 bg-[#f5f1e8]/60 backdrop-blur-md p-6 md:p-8 max-w-2xl">
+        <p className="text-[10px] md:text-xs tracking-[0.3em] uppercase text-[#8b6f3a] mb-2">
+          To begin
+        </p>
+        <h3 className="font-serif text-2xl md:text-3xl mb-2">
+          Send your first <span className="italic text-[#8b6f3a]">invitation</span>.
+        </h3>
+        <p className="text-sm md:text-base text-[#5c4d2e] font-light mb-5">
+          Create a link to share with someone — by email, by text, however
+          feels right. No account needed for them.
+        </p>
+        <Link
+          href="/dashboard/messages/invites"
+          className="inline-flex items-center gap-2 bg-[#2c2416] text-[#f5f1e8] px-5 md:px-6 py-3 hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase"
+        >
+          Manage invitations
+          <span>→</span>
+        </Link>
+      </div>
+
+      <p className="text-xs md:text-sm italic text-[#8b6f3a]/70">
+        — The shoebox for received memories arrives in the next update.
+      </p>
     </div>
   )
 }
@@ -217,11 +288,6 @@ function MessageCard({ m }: { m: MessageRow }) {
   const label = STATE_LABELS[m.state]
   const trigger = m.triggerDate ? formatMediumDate(m.triggerDate) : null
 
-  // Build a meaningful title:
-  // 1. "To [Name]" if recipient set
-  // 2. Else "[Subject]" if subject set
-  // 3. Else first 6 words of body (for letters) or "Untitled draft" (for video)
-  // 4. Always fall back to "Untitled draft"
   const title = (() => {
     if (m.recipientName) return `To ${m.recipientName}`
     if (m.subject) return m.subject
@@ -233,7 +299,6 @@ function MessageCard({ m }: { m: MessageRow }) {
     return 'Untitled draft'
   })()
 
-  // For drafts, show "Started [relative time]" subtitle
   const startedLabel =
     m.state === 'drafting' ? `Started ${relativeTime(m.createdAt)}` : null
 
@@ -303,7 +368,6 @@ function relativeTime(iso: string): string {
   if (hr < 24) return `${hr} hour${hr === 1 ? '' : 's'} ago`
   const days = Math.floor(hr / 24)
   if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`
-  // Past a week, show the date
   return new Date(iso).toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',

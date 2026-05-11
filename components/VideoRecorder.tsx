@@ -6,20 +6,78 @@ import { motion, AnimatePresence } from 'motion/react'
 import { upload } from '@vercel/blob/client'
 
 type Stage = 'idle' | 'requesting' | 'live' | 'recording' | 'review' | 'uploading' | 'done' | 'error'
+type Source = 'record' | 'file'
 
 interface VideoRecorderProps {
+  /**
+   * Identifier used in the upload filename path. For outgoing messages this
+   * is the message id; for contributions it's the invite token (or a sub-id
+   * the parent chooses). Just needs to be unique enough to avoid blob
+   * collisions across users.
+   */
   messageId: string
   onUploaded: (info: { url: string; blobPath: string; durationSec: number }) => void
   initialVideoUrl?: string | null
   maxSeconds?: number
+
+  /**
+   * The Vercel Blob client-upload token endpoint. Defaults to
+   *   /api/messages/[messageId]/upload-url
+   * for backwards compatibility with the existing MessageEditor flow.
+   * Contributions pass a token-based public endpoint instead.
+   */
+  uploadUrlEndpoint?: string
+
+  /**
+   * After upload completes, the recorder will PATCH this endpoint with
+   *   { mediaUrl, mediaBlobPath, mediaDurationSec }
+   * to link the blob to its parent row. For contributions there's no
+   * pre-existing row to patch (the row is created at submit time with
+   * the URL already in hand), so contributions pass `null` and the
+   * recorder skips the PATCH entirely — parent handles persistence.
+   */
+  patchEndpoint?: string | null
+
+  /**
+   * Filename prefix inside the blob bucket. Defaults to 'videos' (existing
+   * behavior). Contributions use 'contributions' so storage is grouped.
+   */
+  blobPathPrefix?: string
+
+  /**
+   * Optional opaque payload sent with the upload-token request, available to
+   * the server's onBeforeGenerateToken handler via clientPayload. Used by the
+   * contributions flow to pass the invite token (since it can't read a Clerk
+   * session). Outgoing messages don't need this — they auth via cookie.
+   */
+  uploadClientPayload?: string
 }
 
 const DEFAULT_MAX_SECONDS = 10 * 60
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024 // 500 MB
+
+const ALLOWED_VIDEO_MIME = [
+  'video/webm',
+  'video/mp4',
+  'video/quicktime',
+  'video/x-matroska',
+]
 
 /**
- * MediaRecorder-based video recorder.
+ * MediaRecorder-based video recorder, now with optional file-upload path.
  *
- * Design notes (Zip 2b.3):
+ * Design notes (Zip 2c.1):
+ *   - Endpoint paths (upload token + PATCH) are now configurable so this
+ *     component can serve both outgoing messages and incoming contributions.
+ *     Defaults preserve the original message-editor behavior.
+ *   - A new "Upload a video" affordance on the idle screen lets the user
+ *     pick a pre-recorded file instead of recording fresh. Useful on phones
+ *     where users already have the footage in their camera roll.
+ *   - For uploaded files we still measure duration via a hidden <video>
+ *     metadata load before sending — so the recipient view can show
+ *     "Video · 1:34" the same way as recorded clips.
+ *
+ * Earlier design notes (preserved from Zip 2b.3):
  *   - No resolution constraints on getUserMedia. Phones (iPhone especially)
  *     zoom in heavily when given a target width/height because they crop
  *     from a much larger native sensor. Letting the device pick its native
@@ -39,25 +97,30 @@ export function VideoRecorder({
   onUploaded,
   initialVideoUrl,
   maxSeconds = DEFAULT_MAX_SECONDS,
+  uploadUrlEndpoint,
+  patchEndpoint,
+  blobPathPrefix = 'videos',
+  uploadClientPayload,
 }: VideoRecorderProps) {
   const [stage, setStage] = useState<Stage>(initialVideoUrl ? 'done' : 'idle')
+  const [source, setSource] = useState<Source>('record')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [seconds, setSeconds] = useState(0)
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(initialVideoUrl ?? null)
-  // Measured aspect ratio of the active stream/recording (width / height).
-  // Falls back to 16:9 until we have real numbers.
   const [aspectRatio, setAspectRatio] = useState<number>(16 / 9)
 
-  // React to initialVideoUrl changing AFTER mount. This happens when the
-  // parent (MessageEditor in edit mode) fetches the message and discovers
-  // it has a saved mediaUrl. Without this effect, the recorder would have
-  // mounted with initialVideoUrl=null, locked stage to 'idle', and never
-  // updated even when the fetch completed.
-  //
-  // Guard: only sync if the user isn't actively recording or has a local
-  // recording they haven't accepted yet. Don't yank them out of an
-  // in-progress flow.
+  // Default endpoints (back-compat with MessageEditor)
+  const effectiveUploadUrl =
+    uploadUrlEndpoint ?? `/api/messages/${messageId}/upload-url`
+  // If patchEndpoint is explicitly `null`, skip PATCH entirely. If undefined,
+  // use the legacy default. If a string, use that.
+  const effectivePatch =
+    patchEndpoint === null
+      ? null
+      : (patchEndpoint ?? `/api/messages/${messageId}`)
+
+  // Sync `initialVideoUrl` if the parent loads it after mount (edit mode).
   useEffect(() => {
     if (!initialVideoUrl) return
     if (stage === 'recording' || stage === 'review' || stage === 'uploading') return
@@ -72,6 +135,7 @@ export function VideoRecorder({
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const tickRef = useRef<number | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const stopCamera = useCallback(() => {
     if (streamRef.current) {
@@ -95,10 +159,9 @@ export function VideoRecorder({
 
   const startCamera = async () => {
     setErrorMsg(null)
+    setSource('record')
     setStage('requesting')
     try {
-      // No width/height/frameRate constraints — let the device pick its
-      // native preview. This is the fix for the iPhone over-zoom issue.
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user' },
         audio: true,
@@ -126,7 +189,62 @@ export function VideoRecorder({
     }
   }
 
-  // Update aspectRatio when the live video reports its actual dimensions
+  // Pick an existing video file. Measure its duration via metadata load.
+  const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-picking the same file later
+    if (!file) return
+
+    setErrorMsg(null)
+
+    // Validate type
+    const baseType = (file.type || '').split(';')[0].trim()
+    if (!ALLOWED_VIDEO_MIME.includes(baseType)) {
+      setErrorMsg(
+        `That file type (${baseType || 'unknown'}) isn’t supported. Try a .mp4, .mov, or .webm video.`
+      )
+      setStage('error')
+      return
+    }
+
+    // Validate size
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setErrorMsg(
+        `That video is ${(file.size / 1024 / 1024).toFixed(1)} MB. The limit is ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.`
+      )
+      setStage('error')
+      return
+    }
+
+    // Measure duration + dimensions before showing the review screen
+    const url = URL.createObjectURL(file)
+    const measured = await measureVideo(url).catch(() => null)
+    if (!measured) {
+      URL.revokeObjectURL(url)
+      setErrorMsg('Could not read that video. It may be corrupted or in an unsupported format.')
+      setStage('error')
+      return
+    }
+
+    if (measured.duration > maxSeconds) {
+      URL.revokeObjectURL(url)
+      const m = Math.floor(maxSeconds / 60)
+      setErrorMsg(
+        `That video is ${formatDuration(Math.round(measured.duration))} long. The limit is ${m} minute${m === 1 ? '' : 's'}.`
+      )
+      setStage('error')
+      return
+    }
+
+    setSource('file')
+    setRecordedBlob(file)
+    setPreviewUrl(url)
+    setSeconds(Math.round(measured.duration))
+    setAspectRatio(measured.aspectRatio)
+    stopCamera() // in case camera was on
+    setStage('review')
+  }
+
   const handleLiveMetadata = () => {
     const el = liveVideoRef.current
     if (!el) return
@@ -134,8 +252,6 @@ export function VideoRecorder({
       setAspectRatio(el.videoWidth / el.videoHeight)
     }
   }
-  // Same for the recorded preview (in case the saved video is a different
-  // orientation than what we measured live — e.g. user rotated mid-recording)
   const handleReviewMetadata = () => {
     const el = reviewVideoRef.current
     if (!el) return
@@ -195,44 +311,48 @@ export function VideoRecorder({
     setPreviewUrl(null)
     setRecordedBlob(null)
     setSeconds(0)
-    startCamera()
+    if (source === 'record') {
+      startCamera()
+    } else {
+      // For file-source, go back to idle so the user can pick again
+      setStage('idle')
+    }
   }
 
   const acceptAndUpload = async () => {
     if (!recordedBlob) return
     setStage('uploading')
     try {
-      // Strip codec parameters from the MIME type. Browsers (especially Chrome)
-      // report types like 'video/webm; codecs=vp09.00.10.08,opus'. Vercel Blob
-      // does exact-string matching against allowedContentTypes on the server,
-      // so we need to send just 'video/webm' (the base type).
+      // Strip codec parameters from MIME — Vercel Blob exact-matches.
       const baseMimeType = (recordedBlob.type || 'video/webm').split(';')[0].trim()
       const ext = (baseMimeType.split('/')[1] || 'webm')
-      const filename = `videos/${messageId}/${Date.now()}.${ext}`
+      const filename = `${blobPathPrefix}/${messageId}/${Date.now()}.${ext}`
 
       const blob = await upload(filename, recordedBlob, {
         access: 'public',
-        handleUploadUrl: `/api/messages/${messageId}/upload-url`,
+        handleUploadUrl: effectiveUploadUrl,
         contentType: baseMimeType,
+        ...(uploadClientPayload ? { clientPayload: uploadClientPayload } : {}),
       })
 
-      // Persist the URL + metadata on the message row. This is the
-      // primary save path — we don't rely on Vercel's onUploadCompleted
-      // webhook because that doesn't fire reliably from auth-gated routes.
-      const patchRes = await fetch(`/api/messages/${messageId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mediaUrl: blob.url,
-          mediaBlobPath: blob.pathname,
-          mediaDurationSec: seconds,
-        }),
-      })
-      if (!patchRes.ok) {
-        const errJson = await patchRes.json().catch(() => ({}))
-        throw new Error(
-          `Saved video to storage, but couldn\u2019t link it to your message: ${errJson.error || patchRes.statusText}`
-        )
+      // Optionally PATCH a parent row to link this blob. Contributions skip
+      // this (their parent row is created on submit, with the URL in hand).
+      if (effectivePatch) {
+        const patchRes = await fetch(effectivePatch, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mediaUrl: blob.url,
+            mediaBlobPath: blob.pathname,
+            mediaDurationSec: seconds,
+          }),
+        })
+        if (!patchRes.ok) {
+          const errJson = await patchRes.json().catch(() => ({}))
+          throw new Error(
+            `Saved video to storage, but couldn’t link it to your message: ${errJson.error || patchRes.statusText}`
+          )
+        }
       }
 
       onUploaded({
@@ -247,26 +367,14 @@ export function VideoRecorder({
     }
   }
 
-  const fmt = (s: number) => {
-    const m = Math.floor(s / 60)
-    const r = s % 60
-    return `${m}:${r.toString().padStart(2, '0')}`
-  }
-
   const showLive = stage === 'requesting' || stage === 'live' || stage === 'recording'
   const showReview = stage === 'review' || stage === 'done' || stage === 'uploading'
 
-  // Frame styling:
-  //   - aspectRatio is measured from the actual stream
-  //   - max-h-[60vh] keeps the controls visible without scrolling, even
-  //     when the user holds a phone in landscape (where a wide aspect ratio
-  //     would otherwise want to take the whole height)
-  //   - For portrait video on desktop, max-w prevents a giant tall column
   const frameStyle: React.CSSProperties = {
     aspectRatio: `${aspectRatio}`,
     maxHeight: '60vh',
-    maxWidth: aspectRatio < 1 ? '420px' : undefined, // cap portrait width
-    margin: '0 auto', // center when narrower than container
+    maxWidth: aspectRatio < 1 ? '420px' : undefined,
+    margin: '0 auto',
   }
 
   return (
@@ -320,13 +428,12 @@ export function VideoRecorder({
                 transition={{ duration: 1.2, repeat: Infinity }}
                 className="w-2 h-2 bg-[#f5f1e8] rounded-full"
               />
-              REC {fmt(seconds)}
+              REC {formatDuration(seconds)}
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Floating Stop button — overlay so users on small screens can
-            stop without scrolling */}
+        {/* Floating Stop button */}
         <AnimatePresence>
           {stage === 'recording' && (
             <motion.button
@@ -343,16 +450,32 @@ export function VideoRecorder({
         </AnimatePresence>
       </div>
 
-      {/* Controls below the surface — also available, just not the only way
-          to stop a recording on a tiny screen */}
+      {/* Hidden file input — triggered by "Upload a video" button */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ALLOWED_VIDEO_MIME.join(',')}
+        onChange={handleFilePicked}
+        className="hidden"
+      />
+
+      {/* Controls below the surface */}
       <div className="mt-4 flex flex-wrap gap-3">
         {stage === 'idle' && (
-          <button
-            onClick={startCamera}
-            className="px-5 py-3 bg-[#2c2416] text-[#f5f1e8] hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase"
-          >
-            Start camera
-          </button>
+          <>
+            <button
+              onClick={startCamera}
+              className="px-5 py-3 bg-[#2c2416] text-[#f5f1e8] hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase"
+            >
+              ● Record video
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-5 py-3 border border-[#2c2416] text-[#2c2416] hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs tracking-[0.2em] uppercase"
+            >
+              ↑ Upload a video
+            </button>
+          </>
         )}
         {stage === 'live' && (
           <>
@@ -393,7 +516,7 @@ export function VideoRecorder({
               onClick={redo}
               className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
             >
-              ↻ Redo
+              {source === 'record' ? '↻ Redo' : '↻ Pick another'}
             </button>
           </>
         )}
@@ -403,12 +526,33 @@ export function VideoRecorder({
           </p>
         )}
         {stage === 'done' && previewUrl && (
-          <button
-            onClick={redo}
-            className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
-          >
-            Record again
-          </button>
+          <>
+            <button
+              onClick={() => {
+                if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+                setPreviewUrl(null)
+                setRecordedBlob(null)
+                setSeconds(0)
+                startCamera()
+              }}
+              className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
+            >
+              ● Record again
+            </button>
+            <button
+              onClick={() => {
+                if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+                setPreviewUrl(null)
+                setRecordedBlob(null)
+                setSeconds(0)
+                setStage('idle')
+                setTimeout(() => fileInputRef.current?.click(), 0)
+              }}
+              className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
+            >
+              ↑ Upload another
+            </button>
+          </>
         )}
         {stage === 'error' && (
           <button
@@ -428,4 +572,32 @@ export function VideoRecorder({
       )}
     </div>
   )
+}
+
+function formatDuration(s: number): string {
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${r.toString().padStart(2, '0')}`
+}
+
+/** Probe a video file via a hidden element to get duration + dimensions. */
+function measureVideo(
+  url: string
+): Promise<{ duration: number; aspectRatio: number }> {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('video')
+    el.preload = 'metadata'
+    el.muted = true
+    el.playsInline = true
+    el.onloadedmetadata = () => {
+      const duration = isFinite(el.duration) ? el.duration : 0
+      const ratio =
+        el.videoWidth > 0 && el.videoHeight > 0
+          ? el.videoWidth / el.videoHeight
+          : 16 / 9
+      resolve({ duration, aspectRatio: ratio })
+    }
+    el.onerror = () => reject(new Error('Could not load video metadata'))
+    el.src = url
+  })
 }

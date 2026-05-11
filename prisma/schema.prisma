@@ -113,10 +113,11 @@ model Contribution {
   contributorName String
   contributorNote String?
 
-  type            String
+  type            String    // 'letter' | 'video' | 'photo' | 'story'
   content         String?
   mediaUrl        String?
   mediaBlobPath   String?
+  mediaDurationSec Int?     // Only set for type='video'
 
   viewedByUser    Boolean   @default(false)
   importedToTimelineItemId String?

@@ -15,14 +15,20 @@ interface NavItem {
 
 // Order matches the chapter sequence in the dashboard cards. Update the
 // `available` flag as each zip ships.
+//
+// Note: "Contributions" deep-links into the Messages page on the "From others"
+// tab. Same URL family as iii. Messages — both highlight on /dashboard/messages.
+// That's intentional: contributions and outgoing messages share a home (the
+// shoebox), the nav item is just a shortcut.
 const ITEMS: NavItem[] = [
-  { num: 'i.',   label: 'Dashboard',    href: '/dashboard',              available: true  },
-  { num: 'ii.',  label: 'Timeline',     href: '/dashboard/timeline',     available: true  },
-  { num: 'iii.', label: 'Messages',     href: '/dashboard/messages',     available: true  },
-  { num: 'iv.',  label: 'Contacts',     href: '/dashboard/contacts',     available: false },
-  { num: 'v.',   label: 'Arrangements', href: '/dashboard/arrangements', available: false },
-  { num: 'vi.',  label: 'Vault',        href: '/dashboard/vault',        available: false },
-  { num: 'vii.', label: 'Executor',     href: '/dashboard/executor',     available: false },
+  { num: 'i.',    label: 'Dashboard',     href: '/dashboard',                          available: true  },
+  { num: 'ii.',   label: 'Timeline',      href: '/dashboard/timeline',                 available: true  },
+  { num: 'iii.',  label: 'Messages',      href: '/dashboard/messages',                 available: true  },
+  { num: 'iv.',   label: 'Contributions', href: '/dashboard/messages?tab=received',    available: true  },
+  { num: 'v.',    label: 'Contacts',      href: '/dashboard/contacts',                 available: false },
+  { num: 'vi.',   label: 'Arrangements',  href: '/dashboard/arrangements',             available: false },
+  { num: 'vii.',  label: 'Vault',         href: '/dashboard/vault',                    available: false },
+  { num: 'viii.', label: 'Executor',      href: '/dashboard/executor',                 available: false },
 ]
 
 export function AppNav() {
