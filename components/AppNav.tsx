@@ -18,7 +18,7 @@ interface NavItem {
 const ITEMS: NavItem[] = [
   { num: 'i.',   label: 'Dashboard',    href: '/dashboard',              available: true  },
   { num: 'ii.',  label: 'Timeline',     href: '/dashboard/timeline',     available: true  },
-  { num: 'iii.', label: 'Messages',     href: '/dashboard/messages',     available: false },
+  { num: 'iii.', label: 'Messages',     href: '/dashboard/messages',     available: true  },
   { num: 'iv.',  label: 'Contacts',     href: '/dashboard/contacts',     available: false },
   { num: 'v.',   label: 'Arrangements', href: '/dashboard/arrangements', available: false },
   { num: 'vi.',  label: 'Vault',        href: '/dashboard/vault',        available: false },

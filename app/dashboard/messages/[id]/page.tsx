@@ -1,0 +1,316 @@
+// app/dashboard/messages/[id]/page.tsx
+'use client'
+
+import Link from 'next/link'
+import { useRouter, useParams, useSearchParams } from 'next/navigation'
+import { Suspense, useState, useEffect } from 'react'
+import { motion } from 'motion/react'
+import { AppNav } from '@/components/AppNav'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { STATE_LABELS, type MessageState } from '@/lib/messageHelpers'
+
+interface Message {
+  id: string
+  recipientName: string
+  recipientEmail: string | null
+  type: 'letter' | 'video'
+  subject: string | null
+  content: string | null
+  mediaUrl: string | null
+  mediaDurationSec: number | null
+  triggerDate: string | null
+  state: MessageState
+  sentAt: string | null
+  archivedAt: string | null
+  approvalPromptedAt: string | null
+  approvalExpiresAt: string | null
+}
+
+export default function MessageDetailPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-[#f5f1e8] text-[#5c4d2e]">
+        <p className="font-serif italic">Loading…</p>
+      </div>
+    }>
+      <Inner />
+    </Suspense>
+  )
+}
+
+function Inner() {
+  const router = useRouter()
+  const params = useParams<{ id: string }>()
+  const search = useSearchParams()
+  const id = params.id
+
+  const [msg, setMsg] = useState<Message | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [askSendNow, setAskSendNow] = useState(false)
+  const [askDelete, setAskDelete] = useState(false)
+  const [askArchive, setAskArchive] = useState(false)
+
+  const banner =
+    search.get('sent') ? 'Sent.'
+    : search.get('scheduled') ? 'Scheduled.'
+    : null
+
+  const refetch = async () => {
+    const res = await fetch(`/api/messages/${id}`)
+    if (res.ok) setMsg(await res.json())
+  }
+
+  useEffect(() => {
+    refetch().finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+
+  const act = async (path: string, body?: object) => {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/messages/${id}/${path}`, {
+        method: 'POST',
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined,
+      })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.error || 'Action failed')
+      }
+      await refetch()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async () => {
+    setAskDelete(false)
+    setBusy(true)
+    try {
+      await fetch(`/api/messages/${id}`, { method: 'DELETE' })
+      router.push('/dashboard/messages')
+    } catch {
+      setBusy(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f5f1e8] text-[#5c4d2e]">
+        <p className="font-serif italic">Loading…</p>
+      </div>
+    )
+  }
+  if (!msg) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f5f1e8] text-[#5c4d2e]">
+        <p className="font-serif italic">Message not found.</p>
+      </div>
+    )
+  }
+
+  const label = STATE_LABELS[msg.state]
+  const trigger = msg.triggerDate
+    ? new Date(msg.triggerDate).toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      })
+    : null
+
+  return (
+    <div className="min-h-screen bg-[#f5f1e8] text-[#2c2416] relative overflow-x-hidden">
+      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+        <motion.div
+          animate={{ x: [0, 200, 0], y: [0, 150, 0], scale: [1, 1.2, 1] }}
+          transition={{ duration: 50, repeat: Infinity, ease: 'easeInOut' }}
+          className="absolute -top-40 -left-40 w-[500px] md:w-[800px] h-[500px] md:h-[800px] rounded-full"
+          style={{
+            background: 'radial-gradient(circle, rgba(139,111,58,0.18) 0%, transparent 70%)',
+            filter: 'blur(80px)',
+          }}
+        />
+      </div>
+      <div
+        className="fixed inset-0 pointer-events-none opacity-[0.04] z-50"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+        }}
+      />
+
+      <AppNav />
+
+      <main className="relative z-10 max-w-[900px] mx-auto px-5 md:px-12 py-10 md:py-16">
+        <Link
+          href="/dashboard/messages"
+          className="text-[10px] md:text-xs tracking-[0.2em] uppercase text-[#8b6f3a] hover:text-[#2c2416] transition mb-6 inline-block"
+        >
+          ← Back to shoebox
+        </Link>
+
+        {banner && (
+          <div className="mb-6 p-4 border border-[#8b6f3a]/40 bg-[#8b6f3a]/10 text-[#5c4d2e] font-serif italic">
+            ✓ {banner}
+          </div>
+        )}
+
+        {msg.state === 'pending_approval' && (
+          <div className="mb-8 md:mb-10 p-5 md:p-6 border-2 border-[#c0392b]/40 bg-[#c0392b]/5">
+            <p className="font-serif italic text-lg md:text-xl text-[#c0392b] mb-3">
+              Awaiting your ok.
+            </p>
+            <p className="text-sm md:text-base text-[#5c4d2e] mb-4">
+              The delivery date has arrived. If you don&apos;t take action within 14
+              days, we&apos;ll send it as you scheduled.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={() => act('approve')}
+                disabled={busy}
+                className="px-5 py-3 bg-[#2c2416] text-[#f5f1e8] hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+              >
+                Send now
+              </button>
+              <Link
+                href={`/dashboard/messages/${id}/edit`}
+                className="px-5 py-3 border border-[#2c2416] hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs tracking-[0.2em] uppercase"
+              >
+                Postpone
+              </Link>
+              <button
+                onClick={() => setAskArchive(true)}
+                disabled={busy}
+                className="px-5 py-3 border border-[#c0392b]/50 text-[#c0392b] hover:bg-[#c0392b]/5 transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+              >
+                Cancel &amp; archive
+              </button>
+            </div>
+          </div>
+        )}
+
+        <p className="text-[10px] md:text-xs tracking-[0.3em] md:tracking-[0.4em] uppercase text-[#8b6f3a] mb-3 md:mb-4">
+          {msg.type === 'video' ? 'A video message' : 'A letter'} · {label.label}
+        </p>
+        <h1 className="font-serif text-3xl md:text-5xl leading-tight mb-2">
+          For <span className="italic text-[#8b6f3a]">{msg.recipientName || 'someone'}</span>
+        </h1>
+        {msg.subject && (
+          <p className="font-serif italic text-lg md:text-2xl text-[#5c4d2e] mb-6">
+            {msg.subject}
+          </p>
+        )}
+
+        {trigger && (
+          <p className="text-sm md:text-base text-[#5c4d2e] mb-6">
+            {msg.state === 'sent' ? 'Delivered on' : 'Scheduled for'}{' '}
+            <span className="italic">{trigger}</span>
+          </p>
+        )}
+
+        <div className="mt-6 mb-8 md:mb-10">
+          {msg.type === 'video' ? (
+            msg.mediaUrl ? (
+              <video src={msg.mediaUrl} controls playsInline className="w-full bg-black" />
+            ) : (
+              <p className="font-serif italic text-[#8b6f3a]">No video yet.</p>
+            )
+          ) : (
+            <div className="bg-[#f5f1e8]/80 border border-[#2c2416]/10 p-6 md:p-10 font-serif text-base md:text-lg leading-relaxed whitespace-pre-wrap text-[#2c2416]">
+              {msg.content || <span className="italic text-[#8b6f3a]/60">No body yet…</span>}
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <p className="mb-4 text-sm text-[#c0392b] italic">{error}</p>
+        )}
+
+        <div className="flex flex-wrap gap-3 mt-8">
+          {msg.state !== 'sent' && msg.state !== 'archived' && (
+            <Link
+              href={`/dashboard/messages/${id}/edit`}
+              className="px-5 py-3 border border-[#2c2416] hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs tracking-[0.2em] uppercase"
+            >
+              Edit
+            </Link>
+          )}
+          {(msg.state === 'drafting' || msg.state === 'scheduled') && (
+            <button
+              onClick={() => setAskSendNow(true)}
+              disabled={busy}
+              className="px-5 py-3 bg-[#2c2416] text-[#f5f1e8] hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+            >
+              Send now
+            </button>
+          )}
+          {msg.state !== 'archived' && msg.state !== 'sent' && msg.state !== 'pending_approval' && (
+            <button
+              onClick={() => setAskArchive(true)}
+              disabled={busy}
+              className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+            >
+              Archive
+            </button>
+          )}
+          {msg.state === 'archived' && (
+            <button
+              onClick={() => act('restore')}
+              disabled={busy}
+              className="px-5 py-3 border border-[#2c2416] hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+            >
+              Restore from archive
+            </button>
+          )}
+          <button
+            onClick={() => setAskDelete(true)}
+            disabled={busy}
+            className="px-5 py-3 text-[#c0392b] hover:underline text-xs tracking-[0.2em] uppercase ml-auto disabled:opacity-50"
+          >
+            Delete permanently
+          </button>
+        </div>
+      </main>
+
+      <ConfirmDialog
+        open={askSendNow}
+        title="Send this message now?"
+        message="The recipient will receive it immediately. This cannot be undone."
+        tone="danger"
+        confirmLabel="Send now"
+        onConfirm={() => {
+          setAskSendNow(false)
+          act('send-now')
+        }}
+        onCancel={() => setAskSendNow(false)}
+      />
+
+      <ConfirmDialog
+        open={askArchive}
+        title="Archive this message?"
+        message="It will be moved to your archive. You can restore it any time before deleting."
+        confirmLabel="Archive"
+        onConfirm={() => {
+          setAskArchive(false)
+          act('archive')
+        }}
+        onCancel={() => setAskArchive(false)}
+      />
+
+      <ConfirmDialog
+        open={askDelete}
+        title="Delete permanently?"
+        message="This message and any video attached will be removed forever."
+        tone="danger"
+        confirmLabel="Delete forever"
+        onConfirm={remove}
+        onCancel={() => setAskDelete(false)}
+      />
+    </div>
+  )
+}

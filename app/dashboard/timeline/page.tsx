@@ -7,6 +7,7 @@ import { PhotoUploader } from '@/components/PhotoUploader'
 import { PhotoCarousel, type PhotoData } from '@/components/PhotoCarousel'
 import { Flipbook, type FlipbookPage } from '@/components/Flipbook'
 import { AppNav } from '@/components/AppNav'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 interface TimelineItem {
   id: string
@@ -40,6 +41,7 @@ export default function Timeline() {
   const [expandedItem, setExpandedItem] = useState<string | null>(null)
   const [showFlipbook, setShowFlipbook] = useState(false)
   const [pageTurnStyle, setPageTurnStyle] = useState<'fade' | 'curl'>('fade')
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
 
   const fetchAll = useCallback(async () => {
     try {
@@ -116,8 +118,14 @@ export default function Timeline() {
     setShowForm(true)
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this milestone? Photos attached to it will also be removed.')) return
+  const handleDelete = (id: string) => {
+    setPendingDeleteId(id)
+  }
+
+  const performDelete = async () => {
+    const id = pendingDeleteId
+    setPendingDeleteId(null)
+    if (!id) return
     try {
       await fetch(`/api/timeline/${id}`, { method: 'DELETE' })
       await fetchAll()
@@ -562,6 +570,16 @@ export default function Timeline() {
           )}
         </AnimatePresence>
       </main>
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        title="Delete this milestone?"
+        message="Any photos attached to this milestone will also be removed. This cannot be undone."
+        tone="danger"
+        confirmLabel="Delete"
+        onConfirm={performDelete}
+        onCancel={() => setPendingDeleteId(null)}
+      />
     </div>
   )
 }

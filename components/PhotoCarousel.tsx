@@ -3,6 +3,7 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 export interface PhotoData {
   id: string
@@ -20,15 +21,13 @@ interface PhotoCarouselProps {
   onReorder: (ids: string[]) => void
 }
 
-// Locked aspect ratio for the frame. 4:3 reads as classic photograph;
-// portraits get letterboxed against a blurred version of themselves so the
-// frame never bounces and portraits don't feel cramped.
 const FRAME_ASPECT = 4 / 3
 
 export function PhotoCarousel({ photos, onDelete, onCaption, onReorder }: PhotoCarouselProps) {
   const [active, setActive] = useState(0)
   const [editingCaption, setEditingCaption] = useState(false)
   const [captionDraft, setCaptionDraft] = useState('')
+  const [askDelete, setAskDelete] = useState(false)
 
   if (photos.length === 0) return null
 
@@ -58,9 +57,14 @@ export function PhotoCarousel({ photos, onDelete, onCaption, onReorder }: PhotoC
     setActive(newIdx)
   }
 
+  const confirmDelete = () => {
+    setAskDelete(false)
+    onDelete(photo.id)
+    if (active >= photos.length - 1) setActive(Math.max(0, photos.length - 2))
+  }
+
   return (
     <div className="mt-4">
-      {/* Locked-aspect frame */}
       <div
         className="relative bg-[#2c2416]/5 border border-[#2c2416]/10 overflow-hidden"
         style={{ aspectRatio: FRAME_ASPECT }}
@@ -74,22 +78,16 @@ export function PhotoCarousel({ photos, onDelete, onCaption, onReorder }: PhotoC
             transition={{ duration: 0.3 }}
             className="absolute inset-0"
           >
-            {/* Blurred backdrop — same image stretched + blurred, fills the frame
-                so portrait photos don't show empty bars. Eyes are drawn to the
-                centered, in-focus version on top. */}
             <div
               aria-hidden="true"
               className="absolute inset-0 bg-cover bg-center"
               style={{
                 backgroundImage: `url("${photo.url}")`,
                 filter: 'blur(28px) brightness(0.85) saturate(0.9)',
-                transform: 'scale(1.1)', // hides blur edge bleed
+                transform: 'scale(1.1)',
               }}
             />
-            {/* Subtle warm wash so the cream theme stays cohesive over dark photos */}
             <div className="absolute inset-0 bg-[#2c2416]/15" aria-hidden="true" />
-
-            {/* The actual photo, contained within the frame */}
             <img
               src={photo.url}
               alt={photo.caption || ''}
@@ -134,7 +132,6 @@ export function PhotoCarousel({ photos, onDelete, onCaption, onReorder }: PhotoC
         )}
       </div>
 
-      {/* Caption + controls */}
       <div className="mt-3 flex items-start gap-3 flex-wrap">
         <div className="flex-1 min-w-0">
           {editingCaption ? (
@@ -192,18 +189,23 @@ export function PhotoCarousel({ photos, onDelete, onCaption, onReorder }: PhotoC
             </>
           )}
           <button
-            onClick={() => {
-              if (confirm('Remove this photo?')) {
-                onDelete(photo.id)
-                if (active >= photos.length - 1) setActive(Math.max(0, photos.length - 2))
-              }
-            }}
+            onClick={() => setAskDelete(true)}
             className="text-[#8b6f3a] hover:text-[#c0392b] transition"
           >
             Remove
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={askDelete}
+        title="Remove this photo?"
+        message="It will be deleted from your timeline. This cannot be undone."
+        tone="danger"
+        confirmLabel="Remove"
+        onConfirm={confirmDelete}
+        onCancel={() => setAskDelete(false)}
+      />
     </div>
   )
 }
