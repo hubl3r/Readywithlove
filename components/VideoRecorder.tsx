@@ -49,6 +49,23 @@ export function VideoRecorder({
   // Falls back to 16:9 until we have real numbers.
   const [aspectRatio, setAspectRatio] = useState<number>(16 / 9)
 
+  // React to initialVideoUrl changing AFTER mount. This happens when the
+  // parent (MessageEditor in edit mode) fetches the message and discovers
+  // it has a saved mediaUrl. Without this effect, the recorder would have
+  // mounted with initialVideoUrl=null, locked stage to 'idle', and never
+  // updated even when the fetch completed.
+  //
+  // Guard: only sync if the user isn't actively recording or has a local
+  // recording they haven't accepted yet. Don't yank them out of an
+  // in-progress flow.
+  useEffect(() => {
+    if (!initialVideoUrl) return
+    if (stage === 'recording' || stage === 'review' || stage === 'uploading') return
+    setPreviewUrl(initialVideoUrl)
+    setStage('done')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialVideoUrl])
+
   const liveVideoRef = useRef<HTMLVideoElement | null>(null)
   const reviewVideoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)

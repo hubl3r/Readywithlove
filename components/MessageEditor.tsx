@@ -417,7 +417,7 @@ export function MessageEditor(props: Props) {
           </p>
         )}
 
-        <div className="mt-10 md:mt-12 flex flex-wrap gap-3 md:gap-4">
+        <div className="mt-10 md:mt-12 flex flex-col sm:flex-row sm:flex-wrap gap-3 md:gap-4">
           <button
             onClick={onCancelClick}
             className="px-5 md:px-6 py-3 md:py-4 text-[#5c4d2e] hover:text-[#2c2416] transition text-xs md:text-sm tracking-[0.2em] uppercase"
@@ -440,7 +440,7 @@ export function MessageEditor(props: Props) {
           </button>
           <button
             onClick={() => setAskSendNow(true)}
-            className="px-5 md:px-6 py-3 md:py-4 border border-[#c0392b]/50 text-[#c0392b] hover:bg-[#c0392b]/5 transition text-xs md:text-sm tracking-[0.2em] uppercase ml-auto"
+            className="px-5 md:px-6 py-3 md:py-4 border border-[#c0392b]/50 text-[#c0392b] hover:bg-[#c0392b]/5 transition text-xs md:text-sm tracking-[0.2em] uppercase sm:ml-auto"
           >
             Send now
           </button>

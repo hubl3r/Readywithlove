@@ -231,11 +231,11 @@ function Inner() {
           <p className="mb-4 text-sm text-[#c0392b] italic">{error}</p>
         )}
 
-        <div className="flex flex-wrap gap-3 mt-8">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 mt-8">
           {msg.state !== 'sent' && msg.state !== 'archived' && (
             <Link
               href={`/dashboard/messages/${id}/edit`}
-              className="px-5 py-3 border border-[#2c2416] hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs tracking-[0.2em] uppercase"
+              className="px-5 py-3 text-center border border-[#2c2416] hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs tracking-[0.2em] uppercase"
             >
               Edit
             </Link>
@@ -270,7 +270,7 @@ function Inner() {
           <button
             onClick={() => setAskDelete(true)}
             disabled={busy}
-            className="px-5 py-3 text-[#c0392b] hover:underline text-xs tracking-[0.2em] uppercase ml-auto disabled:opacity-50"
+            className="px-5 py-3 text-[#c0392b] hover:underline text-xs tracking-[0.2em] uppercase sm:ml-auto disabled:opacity-50"
           >
             Delete permanently
           </button>

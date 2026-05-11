@@ -93,20 +93,20 @@ export default function MessagesPage() {
             A shoebox for the things you want them to know.
           </p>
 
-          <div className="mt-8 md:mt-10 flex flex-wrap gap-3">
+          <div className="mt-8 md:mt-10 flex flex-col sm:flex-row gap-3 sm:gap-4">
             <Link
               href="/dashboard/messages/new?type=letter"
-              className="group inline-flex items-center gap-3 bg-[#2c2416] text-[#f5f1e8] px-6 md:px-8 py-3 md:py-4 hover:bg-[#8b6f3a] transition"
+              className="group flex items-center justify-between gap-3 bg-[#2c2416] text-[#f5f1e8] px-6 md:px-8 py-3 md:py-4 hover:bg-[#8b6f3a] transition flex-1 sm:flex-initial"
             >
               <span className="tracking-[0.2em] uppercase text-xs md:text-sm">Write a letter</span>
-              <span className="text-lg group-hover:translate-x-1 transition">+</span>
+              <span className="text-base group-hover:translate-x-1 transition">+</span>
             </Link>
             <Link
               href="/dashboard/messages/new?type=video"
-              className="group inline-flex items-center gap-3 border border-[#2c2416] text-[#2c2416] px-6 md:px-8 py-3 md:py-4 hover:bg-[#2c2416] hover:text-[#f5f1e8] transition"
+              className="group flex items-center justify-between gap-3 border border-[#2c2416] text-[#2c2416] px-6 md:px-8 py-3 md:py-4 hover:bg-[#2c2416] hover:text-[#f5f1e8] transition flex-1 sm:flex-initial"
             >
               <span className="tracking-[0.2em] uppercase text-xs md:text-sm">Record a video</span>
-              <span className="group-hover:translate-x-1 transition">●</span>
+              <span className="text-base group-hover:translate-x-1 transition">●</span>
             </Link>
           </div>
         </motion.div>
