@@ -3,6 +3,7 @@ import { auth } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { deliverMessage } from '@/lib/messageDelivery'
+import { isTextType, isMediaType, type MessageType } from '@/lib/messageHelpers'
 
 export async function POST(
   _request: Request,
@@ -20,15 +21,24 @@ export async function POST(
     return NextResponse.json({ error: 'Already sent' }, { status: 400 })
   }
 
-  // Require recipientEmail and content/media before allowing send.
   if (!message.recipientEmail) {
     return NextResponse.json({ error: 'Recipient email required' }, { status: 400 })
   }
-  if (message.type === 'letter' && !message.content) {
-    return NextResponse.json({ error: 'Letter body required' }, { status: 400 })
+
+  // Per-type pre-send validation. Text types need content; media types
+  // need an uploaded blob URL.
+  const type = message.type as MessageType
+  if (isTextType(type) && !message.content) {
+    return NextResponse.json(
+      { error: type === 'letter' ? 'Letter body required' : 'Story body required' },
+      { status: 400 }
+    )
   }
-  if (message.type === 'video' && !message.mediaUrl) {
-    return NextResponse.json({ error: 'Video required' }, { status: 400 })
+  if (isMediaType(type) && !message.mediaUrl) {
+    return NextResponse.json(
+      { error: type === 'video' ? 'Video required' : 'Photo required' },
+      { status: 400 }
+    )
   }
 
   const sent = await deliverMessage(id)

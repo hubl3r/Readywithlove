@@ -16,8 +16,21 @@ interface VideoRecorderProps {
    * collisions across users.
    */
   messageId: string
-  onUploaded: (info: { url: string; blobPath: string; durationSec: number }) => void
+  /**
+   * Called once after upload completes (and after the optional parent PATCH).
+   * Includes trim points the user set in the review stage — both `null` when
+   * they didn't trim (full video plays).
+   */
+  onUploaded: (info: {
+    url: string
+    blobPath: string
+    durationSec: number
+    trimStartSec: number | null
+    trimEndSec: number | null
+  }) => void
   initialVideoUrl?: string | null
+  initialTrimStartSec?: number | null
+  initialTrimEndSec?: number | null
   maxSeconds?: number
 
   /**
@@ -30,7 +43,7 @@ interface VideoRecorderProps {
 
   /**
    * After upload completes, the recorder will PATCH this endpoint with
-   *   { mediaUrl, mediaBlobPath, mediaDurationSec }
+   *   { mediaUrl, mediaBlobPath, mediaDurationSec, mediaTrimStartSec, mediaTrimEndSec }
    * to link the blob to its parent row. For contributions there's no
    * pre-existing row to patch (the row is created at submit time with
    * the URL already in hand), so contributions pass `null` and the
@@ -51,6 +64,13 @@ interface VideoRecorderProps {
    * session). Outgoing messages don't need this — they auth via cookie.
    */
   uploadClientPayload?: string
+
+  /**
+   * Whether to show the focus dot above the camera preview during live and
+   * recording stages. Defaults to true. The dot oscillates softly to draw
+   * the user's gaze toward the camera lens.
+   */
+  showFocusDot?: boolean
 }
 
 const DEFAULT_MAX_SECONDS = 10 * 60
@@ -96,11 +116,14 @@ export function VideoRecorder({
   messageId,
   onUploaded,
   initialVideoUrl,
+  initialTrimStartSec,
+  initialTrimEndSec,
   maxSeconds = DEFAULT_MAX_SECONDS,
   uploadUrlEndpoint,
   patchEndpoint,
   blobPathPrefix = 'videos',
   uploadClientPayload,
+  showFocusDot = true,
 }: VideoRecorderProps) {
   const [stage, setStage] = useState<Stage>(initialVideoUrl ? 'done' : 'idle')
   const [source, setSource] = useState<Source>('record')
@@ -109,6 +132,11 @@ export function VideoRecorder({
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(initialVideoUrl ?? null)
   const [aspectRatio, setAspectRatio] = useState<number>(16 / 9)
+  // Trim state. trimStart/trimEnd in seconds. Null = no trim from that side.
+  // The clip's full duration is `seconds` (for fresh records) or measured
+  // via metadata for uploaded files / existing media.
+  const [trimStart, setTrimStart] = useState<number | null>(initialTrimStartSec ?? null)
+  const [trimEnd, setTrimEnd] = useState<number | null>(initialTrimEndSec ?? null)
 
   // Default endpoints (back-compat with MessageEditor)
   const effectiveUploadUrl =
@@ -311,6 +339,8 @@ export function VideoRecorder({
     setPreviewUrl(null)
     setRecordedBlob(null)
     setSeconds(0)
+    setTrimStart(null)
+    setTrimEnd(null)
     if (source === 'record') {
       startCamera()
     } else {
@@ -345,6 +375,8 @@ export function VideoRecorder({
             mediaUrl: blob.url,
             mediaBlobPath: blob.pathname,
             mediaDurationSec: seconds,
+            mediaTrimStartSec: trimStart,
+            mediaTrimEndSec: trimEnd,
           }),
         })
         if (!patchRes.ok) {
@@ -359,6 +391,8 @@ export function VideoRecorder({
         url: blob.url,
         blobPath: blob.pathname,
         durationSec: seconds,
+        trimStartSec: trimStart,
+        trimEndSec: trimEnd,
       })
       setStage('done')
     } catch (err) {
@@ -379,6 +413,16 @@ export function VideoRecorder({
 
   return (
     <div className="w-full">
+      {/* Focus dot — positioned above the camera frame so users naturally
+          look up toward the lens (which on most laptops and phones sits
+          above the screen). Soft oscillation draws gaze without being
+          distracting. Only visible during live/recording stages. */}
+      {showFocusDot && (stage === 'live' || stage === 'recording') && (
+        <div className="flex justify-center mb-2">
+          <FocusDot />
+        </div>
+      )}
+
       <div
         className="relative bg-black overflow-hidden border border-[#2c2416]/20"
         style={frameStyle}
@@ -505,20 +549,37 @@ export function VideoRecorder({
           </button>
         )}
         {stage === 'review' && (
-          <>
-            <button
-              onClick={acceptAndUpload}
-              className="px-5 py-3 bg-[#2c2416] text-[#f5f1e8] hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase"
-            >
-              ✓ Accept &amp; save
-            </button>
-            <button
-              onClick={redo}
-              className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
-            >
-              {source === 'record' ? '↻ Redo' : '↻ Pick another'}
-            </button>
-          </>
+          <div className="w-full">
+            {/* Trim handles. Lets the user cut awkward "I'm reaching for the
+                stop button" tails off the front and back without re-encoding
+                the file. Persisted alongside the media URL; viewers enforce
+                the bounds on playback. */}
+            {seconds > 0 && (
+              <TrimSlider
+                durationSec={seconds}
+                trimStart={trimStart}
+                trimEnd={trimEnd}
+                onChange={(s, e) => {
+                  setTrimStart(s)
+                  setTrimEnd(e)
+                }}
+              />
+            )}
+            <div className="flex flex-wrap gap-3 mt-4">
+              <button
+                onClick={acceptAndUpload}
+                className="px-5 py-3 bg-[#2c2416] text-[#f5f1e8] hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase"
+              >
+                ✓ Accept &amp; save
+              </button>
+              <button
+                onClick={redo}
+                className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
+              >
+                {source === 'record' ? '↻ Redo' : '↻ Pick another'}
+              </button>
+            </div>
+          </div>
         )}
         {stage === 'uploading' && (
           <p className="text-sm font-serif italic text-[#5c4d2e]">
@@ -601,3 +662,135 @@ function measureVideo(
     el.src = url
   })
 }
+
+/**
+ * Subtle oscillating dot rendered above the camera frame. Anchored to the
+ * top center of the video surface so the user's gaze drifts upward — closer
+ * to where the actual camera lens sits on most laptops and phones. Glow
+ * fades in and out at a slow pace so it's a soft target, not a distraction.
+ */
+function FocusDot() {
+  return (
+    <motion.div
+      animate={{
+        scale: [1, 1.15, 1],
+        boxShadow: [
+          '0 0 8px 2px rgba(139, 111, 58, 0.4)',
+          '0 0 16px 5px rgba(139, 111, 58, 0.7)',
+          '0 0 8px 2px rgba(139, 111, 58, 0.4)',
+        ],
+      }}
+      transition={{
+        duration: 2.4,
+        repeat: Infinity,
+        ease: 'easeInOut',
+      }}
+      className="w-3 h-3 md:w-3.5 md:h-3.5 rounded-full bg-[#8b6f3a]"
+      aria-hidden="true"
+    />
+  )
+}
+
+interface TrimSliderProps {
+  durationSec: number
+  trimStart: number | null
+  trimEnd: number | null
+  onChange: (start: number | null, end: number | null) => void
+}
+
+/**
+ * Two-handle range slider for trimming the front and back of a recorded
+ * clip. Doesn't actually re-encode anything — sets `trimStart`/`trimEnd`
+ * that get stored alongside the media and enforced on playback.
+ *
+ * Handles snap to whole seconds. Minimum gap between handles is 1 second
+ * so you can't trim away the entire video. Showing "0:03 — 0:42 (39 sec)"
+ * keeps users oriented in what the recipient will actually see.
+ */
+function TrimSlider({ durationSec, trimStart, trimEnd, onChange }: TrimSliderProps) {
+  // Defaults: 0 and full duration. Internally we always track concrete
+  // numbers; we expose nulls to the parent only when the user hasn't
+  // trimmed from that side (so a "no trim" state can be persisted as nulls).
+  const effectiveStart = trimStart ?? 0
+  const effectiveEnd = trimEnd ?? durationSec
+
+  // Snap to integers
+  const snap = (n: number) => Math.round(Math.max(0, Math.min(durationSec, n)))
+
+  const handleStartChange = (raw: string) => {
+    const n = snap(Number(raw))
+    const next = Math.min(n, effectiveEnd - 1)
+    onChange(next > 0 ? next : null, trimEnd)
+  }
+  const handleEndChange = (raw: string) => {
+    const n = snap(Number(raw))
+    const next = Math.max(n, effectiveStart + 1)
+    onChange(trimStart, next < durationSec ? next : null)
+  }
+
+  const reset = () => onChange(null, null)
+  const isTrimmed = trimStart !== null || trimEnd !== null
+  const visibleSeconds = effectiveEnd - effectiveStart
+
+  return (
+    <div className="border-t border-[#2c2416]/15 pt-4 mt-2">
+      <div className="flex items-baseline justify-between gap-3 mb-2">
+        <p className="text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a]">
+          Trim (optional)
+        </p>
+        <p className="text-[10px] italic text-[#5c4d2e]/70 tabular-nums">
+          {formatDuration(effectiveStart)} – {formatDuration(effectiveEnd)}
+          {' · '}
+          {visibleSeconds}s
+        </p>
+      </div>
+
+      {/* Two range inputs stacked. Browser native — keeps it accessible
+          and works fine for whole-second precision. Custom-styled handles
+          would be nicer visually but cost a lot more code. */}
+      <div className="space-y-2">
+        <label className="block">
+          <span className="text-[9px] tracking-[0.2em] uppercase text-[#5c4d2e]/70 mr-3 inline-block w-12">
+            Start
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, durationSec - 1)}
+            step={1}
+            value={effectiveStart}
+            onChange={(e) => handleStartChange(e.target.value)}
+            className="align-middle inline-block w-[calc(100%-4rem)] accent-[#8b6f3a]"
+            aria-label="Trim start"
+          />
+        </label>
+        <label className="block">
+          <span className="text-[9px] tracking-[0.2em] uppercase text-[#5c4d2e]/70 mr-3 inline-block w-12">
+            End
+          </span>
+          <input
+            type="range"
+            min={1}
+            max={durationSec}
+            step={1}
+            value={effectiveEnd}
+            onChange={(e) => handleEndChange(e.target.value)}
+            className="align-middle inline-block w-[calc(100%-4rem)] accent-[#8b6f3a]"
+            aria-label="Trim end"
+          />
+        </label>
+      </div>
+
+      {isTrimmed && (
+        <button
+          type="button"
+          onClick={reset}
+          className="mt-2 text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a] hover:text-[#2c2416] transition"
+        >
+          ↺ Reset (play full video)
+        </button>
+      )}
+    </div>
+  )
+}
+

@@ -60,6 +60,11 @@ model Message {
   mediaBlobPath   String?
   mediaDurationSec Int?
 
+  // Zip 2c.3: trim handles for video playback. Inclusive seconds.
+  // Both null = play full. When set, the viewer enforces these bounds.
+  mediaTrimStartSec Int?
+  mediaTrimEndSec   Int?
+
   triggerDate     DateTime?
   state           String    @default("drafting")
   approvalPromptedAt DateTime?
@@ -67,13 +72,8 @@ model Message {
   sentAt          DateTime?
   archivedAt      DateTime?
 
-  // NEW in Zip 2b:
-  // Tokenized link the recipient uses to view the message. Set on send.
   deliveryToken   String?   @unique
-  // Tokens for the user to act on approval prompts via email links.
-  // (Same value works for approve/postpone/cancel — the action is in the URL path.)
   approvalToken   String?   @unique
-  // For tracking which daily-reminder emails have been sent during the 14-day window.
   approvalRemindersSent Int  @default(0)
 
   createdAt       DateTime  @default(now())
@@ -113,11 +113,15 @@ model Contribution {
   contributorName String
   contributorNote String?
 
-  type            String    // 'letter' | 'video' | 'photo' | 'story'
+  type            String
   content         String?
   mediaUrl        String?
   mediaBlobPath   String?
-  mediaDurationSec Int?     // Only set for type='video'
+  mediaDurationSec Int?
+
+  // Zip 2c.3: trim handles. Same semantics as Message.
+  mediaTrimStartSec Int?
+  mediaTrimEndSec   Int?
 
   viewedByUser    Boolean   @default(false)
   importedToTimelineItemId String?
@@ -205,6 +209,11 @@ model Settings {
   ttsEnabled      Boolean  @default(false)
   sttEnabled      Boolean  @default(false)
   reducedMotion   Boolean  @default(false)
+
+  // Zip 2c.3: user's chosen TTS voice. Stored as the Web Speech API's
+  // opaque voiceURI string. Null = auto-pick best available.
+  preferredVoiceURI String?
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   user            User     @relation(fields: [userId], references: [id])

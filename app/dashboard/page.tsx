@@ -13,6 +13,8 @@ interface Stats {
   arrangementCount: number
   contactCount: number
   vaultCount: number
+  contributionCount: number
+  unviewedContributionCount: number
   hasExecutor: boolean
 }
 
@@ -25,6 +27,8 @@ export default function Dashboard() {
     arrangementCount: 0,
     contactCount: 0,
     vaultCount: 0,
+    contributionCount: 0,
+    unviewedContributionCount: 0,
     hasExecutor: false,
   })
   const [loadingStats, setLoadingStats] = useState(true)
@@ -39,6 +43,9 @@ export default function Dashboard() {
       .catch(() => setLoadingStats(false))
   }, [])
 
+  // Section card numbering matches the AppNav minus the "Dashboard" item.
+  // Contributions sits between Messages and Arrangements — the unified
+  // shoebox mental model. The stat line indicates new arrivals when any.
   const sections = [
     {
       num: 'i.',
@@ -47,6 +54,7 @@ export default function Dashboard() {
       desc: 'Add milestones, photos, and stories from your life.',
       href: '/dashboard/timeline',
       stat: stats.timelineCount === 0 ? '0 milestones' : `${stats.timelineCount} milestone${stats.timelineCount === 1 ? '' : 's'}`,
+      hasActivity: false,
     },
     {
       num: 'ii.',
@@ -55,38 +63,56 @@ export default function Dashboard() {
       desc: 'Record videos and write letters for future delivery.',
       href: '/dashboard/messages',
       stat: stats.messageCount === 0 ? '0 messages' : `${stats.messageCount} message${stats.messageCount === 1 ? '' : 's'}`,
+      hasActivity: false,
     },
     {
       num: 'iii.',
+      title: 'Contributions',
+      subtitle: 'From those who love you',
+      desc: 'Memories, letters, and stories shared with you by others.',
+      href: '/dashboard/messages?tab=received',
+      stat: stats.contributionCount === 0
+        ? 'None yet'
+        : stats.unviewedContributionCount > 0
+          ? `${stats.unviewedContributionCount} new · ${stats.contributionCount} total`
+          : `${stats.contributionCount} memor${stats.contributionCount === 1 ? 'y' : 'ies'}`,
+      hasActivity: stats.unviewedContributionCount > 0,
+    },
+    {
+      num: 'iv.',
       title: 'Arrangements',
       subtitle: 'Affairs in order',
       desc: 'Pre-arrange funeral details, vendors, and final wishes.',
       href: '/dashboard/arrangements',
       stat: stats.arrangementCount === 0 ? 'Not started' : `${stats.arrangementCount} arranged`,
+      hasActivity: false,
     },
     {
-      num: 'iv.',
+      num: 'v.',
       title: 'Contacts',
       subtitle: 'Your circle',
       desc: 'Manage who gets notified and who acts on your behalf.',
       href: '/dashboard/contacts',
       stat: stats.contactCount === 0 ? '0 contacts' : `${stats.contactCount} contact${stats.contactCount === 1 ? '' : 's'}`,
+      hasActivity: false,
     },
     {
-      num: 'v.',
+      num: 'vi.',
       title: 'Vault',
       subtitle: 'What only you know',
       desc: 'Securely store passwords, documents, and final instructions.',
       href: '/dashboard/vault',
       stat: stats.vaultCount === 0 ? '0 items' : `${stats.vaultCount} item${stats.vaultCount === 1 ? '' : 's'}`,
+      hasActivity: false,
     },
     {
-      num: 'vi.',
+      num: 'vii.',
       title: 'Executor',
       subtitle: 'Your trusted person',
       desc: 'Designate who unlocks everything when the time comes.',
       href: '/dashboard/executor',
       stat: stats.hasExecutor ? 'Assigned' : 'Not assigned',
+      hasActivity: false,
     },
   ]
 
@@ -103,7 +129,6 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-[#f5f1e8] text-[#2c2416] relative overflow-x-hidden">
-      {/* Subtle animated background */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
         <motion.div
           animate={{
@@ -132,14 +157,12 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Grain overlay */}
       <div className="fixed inset-0 pointer-events-none opacity-[0.04] z-50" style={{
         backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`
       }}/>
 
       <AppNav />
 
-      {/* Welcome */}
       <main className="relative z-10 max-w-[1400px] mx-auto px-5 md:px-12 py-10 md:py-16">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -160,7 +183,6 @@ export default function Dashboard() {
           </p>
         </motion.div>
 
-        {/* Progress */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -224,7 +246,6 @@ export default function Dashboard() {
           </div>
         </motion.div>
 
-        {/* Sections grid */}
         <div className="mt-12 md:mt-20">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -255,6 +276,15 @@ export default function Dashboard() {
                   href={section.href}
                   className="block bg-[#f5f1e8] hover:bg-[#ede5d3] transition p-6 md:p-10 h-full group relative overflow-hidden"
                 >
+                  {/* Activity dot — same red-dot language used in AppNav for
+                      contributions. Stays subtle: only renders when there's
+                      something new to look at. */}
+                  {section.hasActivity && (
+                    <span
+                      className="absolute top-4 right-4 w-2 h-2 rounded-full bg-[#c0392b]"
+                      aria-label="New activity"
+                    />
+                  )}
                   <div className="flex items-start justify-between mb-6 md:mb-8">
                     <div className="font-serif text-5xl md:text-6xl italic text-[#8b6f3a]">
                       {section.num}
@@ -280,7 +310,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Quote footer */}
         <motion.div
           initial={{ opacity: 0 }}
           whileInView={{ opacity: 1 }}

@@ -10,6 +10,8 @@ import { sendDeliveryEmail } from './email/sendDelivery'
  *  - User clicking "Send now"
  *  - Cron auto-delivering after 14-day silence
  *  - Cron auto-delivering when deceasedAt is set and trigger date passes
+ *
+ * Zip 2c.2.2: preview generation expanded for 4 types (letter, video, photo, story).
  */
 export async function deliverMessage(messageId: string) {
   const msg = await prisma.message.findUnique({
@@ -19,19 +21,25 @@ export async function deliverMessage(messageId: string) {
   if (!msg) throw new Error('Message not found')
   if (msg.state === 'sent') return msg
 
-  // Ensure delivery token exists
   const deliveryToken = msg.deliveryToken ?? generateToken()
 
-  // Send email if recipient has an email address. Failures don't block the
-  // state change — we keep an audit trail in logs and the user can resend.
   if (msg.recipientEmail) {
     const base = process.env.NEXT_PUBLIC_APP_URL ?? 'https://www.readywithlove.com'
     const viewUrl = `${base}/m/${deliveryToken}`
     const fromName = msg.user.name ?? 'A loved one'
-    const preview =
-      msg.type === 'letter'
-        ? (msg.content ?? '').split(/\s+/).slice(0, 30).join(' ')
-        : 'A video message'
+
+    // Per-type email preview. Text types: first 30 words. Video: literal
+    // line. Photo: literal line. Keeps preview short for the email body
+    // without leaking too much of the message — recipient gets the full
+    // version on the view page.
+    const preview = (() => {
+      if (msg.type === 'letter' || msg.type === 'story') {
+        return (msg.content ?? '').split(/\s+/).slice(0, 30).join(' ')
+      }
+      if (msg.type === 'video') return 'A video message'
+      if (msg.type === 'photo') return 'A photo'
+      return ''
+    })()
 
     await sendDeliveryEmail({
       to: msg.recipientEmail,

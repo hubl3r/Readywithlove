@@ -4,15 +4,21 @@
 import { Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { MessageEditor } from '@/components/MessageEditor'
+import { MESSAGE_TYPES, type MessageType } from '@/lib/messageHelpers'
 
 // New-message route. Renders MessageEditor in "new" mode (no id yet). The
 // editor POSTs to /api/messages on first save, then router.replaces to the
-// /edit page for the newly-created id. This means clicking "Write a letter"
-// or "Record a video" and leaving WITHOUT saving creates zero database rows.
+// /edit page for the newly-created id. This means clicking a type card and
+// leaving WITHOUT saving creates zero database rows.
+//
+// Zip 2c.2.2: accepts ?type=letter|video|photo|story (default letter).
 
 function Inner() {
   const params = useSearchParams()
-  const type = params.get('type') === 'video' ? 'video' : 'letter'
+  const requested = params.get('type') ?? ''
+  const type: MessageType = (MESSAGE_TYPES as readonly string[]).includes(requested)
+    ? (requested as MessageType)
+    : 'letter'
   return <MessageEditor mode="new" initialType={type} />
 }
 

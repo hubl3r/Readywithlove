@@ -3,7 +3,13 @@ import { auth } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { ensureUser } from '@/lib/userBootstrap'
-import { generateToken, MESSAGE_STATES, type MessageState } from '@/lib/messageHelpers'
+import {
+  generateToken,
+  MESSAGE_STATES,
+  MESSAGE_TYPES,
+  type MessageState,
+  type MessageType,
+} from '@/lib/messageHelpers'
 import { getMessageMinutesLimit, getQuotaStatus } from '@/lib/plans'
 
 // GET — list messages for current user, optionally filtered by state
@@ -44,14 +50,15 @@ export async function GET(request: Request) {
     },
   })
 
-  // Quota
+  // Quota — applies only to video minutes. Photos use the photo quota
+  // (shared with timeline photos), letters/stories are unmetered.
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { plan: true },
   })
   const minutesLimit = getMessageMinutesLimit(user?.plan)
   const totalSeconds = await prisma.message.aggregate({
-    where: { userId, mediaDurationSec: { not: null } },
+    where: { userId, type: 'video', mediaDurationSec: { not: null } },
     _sum: { mediaDurationSec: true },
   })
   const usedMinutes = Math.ceil((totalSeconds._sum.mediaDurationSec ?? 0) / 60)
@@ -62,7 +69,8 @@ export async function GET(request: Request) {
   })
 }
 
-// POST — create a draft (no recipient required at creation; user fills in as they go)
+// POST — create a draft (no recipient required at creation; user fills in
+// as they go). Accepts any of the 4 message types; defaults to 'letter'.
 export async function POST(request: Request) {
   const { userId } = await auth()
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -70,7 +78,11 @@ export async function POST(request: Request) {
   await ensureUser(userId)
 
   const body = await request.json().catch(() => ({}))
-  const type = body.type === 'video' ? 'video' : 'letter'
+  // Validate the requested type; fall back to letter for safety.
+  const requestedType = typeof body.type === 'string' ? body.type : ''
+  const type: MessageType = (MESSAGE_TYPES as readonly string[]).includes(requestedType)
+    ? (requestedType as MessageType)
+    : 'letter'
 
   const message = await prisma.message.create({
     data: {
@@ -81,7 +93,7 @@ export async function POST(request: Request) {
       subject: body.subject ?? null,
       content: body.content ?? null,
       state: 'drafting',
-      approvalToken: generateToken(), // pre-generated so the same token can sign approval emails later
+      approvalToken: generateToken(),
     },
   })
 

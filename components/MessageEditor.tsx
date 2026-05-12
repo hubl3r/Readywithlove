@@ -3,35 +3,36 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion } from 'motion/react'
+import { upload } from '@vercel/blob/client'
 import { AppNav } from '@/components/AppNav'
 import { LetterEditor } from '@/components/LetterEditor'
 import { VideoRecorder } from '@/components/VideoRecorder'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { formatLongDate } from '@/lib/dateFormat'
+import { TYPE_LABELS, type MessageType } from '@/lib/messageHelpers'
 
 interface Message {
   id: string
   recipientName: string
   recipientEmail: string | null
-  type: 'letter' | 'video'
+  type: MessageType
   subject: string | null
   content: string | null
   mediaUrl: string | null
   mediaBlobPath: string | null
   mediaDurationSec: number | null
+  mediaTrimStartSec: number | null
+  mediaTrimEndSec: number | null
   triggerDate: string | null
   state: string
 }
 
 type Props =
-  | { mode: 'new'; initialType: 'letter' | 'video'; messageId?: undefined }
+  | { mode: 'new'; initialType: MessageType; messageId?: undefined }
   | { mode: 'edit'; messageId: string; initialType?: undefined }
 
-// Snapshot a set of form values into a single comparable string. Used to
-// detect "has anything changed since the last save". The order here must
-// stay stable.
 function buildSnapshot(
   recipientName: string,
   recipientEmail: string,
@@ -50,30 +51,37 @@ function buildSnapshot(
   })
 }
 
+// Per-type prompt text inside the editor. Used to render the appropriate
+// placeholder/label and to drive the body editor's intro.
+function placeholderForType(type: MessageType, recipientName: string): string {
+  switch (type) {
+    case 'letter': return `Dear ${recipientName || 'loved one'},`
+    case 'story':  return 'I remember when…'
+    default:       return ''
+  }
+}
+
 export function MessageEditor(props: Props) {
   const router = useRouter()
 
-  // Identity / persisted state
-  // For new mode, `id` is null until the first save creates the draft.
   const [id, setId] = useState<string | null>(
     props.mode === 'edit' ? props.messageId : null
   )
-  const [resolvedType, setResolvedType] = useState<'letter' | 'video'>(
-    // For edit mode we'll overwrite after fetch; placeholder until then.
+  const [resolvedType, setResolvedType] = useState<MessageType>(
     props.mode === 'new' ? props.initialType : 'letter'
   )
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
   const [mediaBlobPath, setMediaBlobPath] = useState<string | null>(null)
   const [mediaDurationSec, setMediaDurationSec] = useState<number | null>(null)
+  const [mediaTrimStartSec, setMediaTrimStartSec] = useState<number | null>(null)
+  const [mediaTrimEndSec, setMediaTrimEndSec] = useState<number | null>(null)
 
-  // Form fields
   const [recipientName, setRecipientName] = useState('')
   const [recipientEmail, setRecipientEmail] = useState('')
   const [subject, setSubject] = useState('')
   const [content, setContent] = useState('')
   const [triggerDate, setTriggerDate] = useState('')
 
-  // UX state
   const [loading, setLoading] = useState(props.mode === 'edit')
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(null)
@@ -81,19 +89,9 @@ export function MessageEditor(props: Props) {
   const [error, setError] = useState<string | null>(null)
   const [askCancel, setAskCancel] = useState(false)
   const [askSendNow, setAskSendNow] = useState(false)
-  // For "back to shoebox" — 3-button dialog: Save / Discard / Keep editing
   const [askExit, setAskExit] = useState(false)
-  // Tracks whether a provisional draft was created (e.g. by opening camera).
-  // When true and the user cancels without saving, we delete the draft so
-  // unwanted empty rows don't pile up.
   const [shouldDeleteOnCancel, setShouldDeleteOnCancel] = useState(false)
 
-  // Snapshot of form values at the moment of last successful save (or
-  // initial fetch). Used by the "back to shoebox" check — if the snapshot
-  // matches the current state, nothing has changed since the last save,
-  // so we don't prompt. Empty string = no snapshot yet (new message that
-  // hasn't been saved). The dialog logic treats an empty snapshot as
-  // "user has nothing to save" only when the form is also empty.
   const [savedSnapshot, setSavedSnapshot] = useState<string>('')
 
   // Fetch existing message in edit mode
@@ -113,7 +111,8 @@ export function MessageEditor(props: Props) {
         setMediaUrl(data.mediaUrl)
         setMediaBlobPath(data.mediaBlobPath)
         setMediaDurationSec(data.mediaDurationSec)
-        // Snapshot what's on the server so we can detect future changes
+        setMediaTrimStartSec(data.mediaTrimStartSec)
+        setMediaTrimEndSec(data.mediaTrimEndSec)
         setSavedSnapshot(
           buildSnapshot(
             data.recipientName ?? '',
@@ -128,7 +127,6 @@ export function MessageEditor(props: Props) {
       .finally(() => setLoading(false))
   }, [props])
 
-  // Save — creates the draft on first call (new mode), patches otherwise
   const save = useCallback(
     async (extras: Record<string, unknown> = {}) => {
       setSaving(true)
@@ -142,19 +140,15 @@ export function MessageEditor(props: Props) {
           triggerDate: triggerDate || null,
           ...extras,
         }
-        // Re-send media metadata when we have it. The VideoRecorder also
-        // PATCHes these after upload, but this is belt-and-suspenders: if
-        // there's any race or the VideoRecorder's PATCH silently failed,
-        // the next save action (Save Draft / Schedule / Send Now) will
-        // also persist what's in local state.
         if (mediaUrl !== null) payload.mediaUrl = mediaUrl
         if (mediaBlobPath !== null) payload.mediaBlobPath = mediaBlobPath
         if (mediaDurationSec !== null) payload.mediaDurationSec = mediaDurationSec
+        if (mediaTrimStartSec !== null) payload.mediaTrimStartSec = mediaTrimStartSec
+        if (mediaTrimEndSec !== null) payload.mediaTrimEndSec = mediaTrimEndSec
 
         let updated: Message
 
         if (id) {
-          // Edit existing
           const res = await fetch(`/api/messages/${id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -166,7 +160,6 @@ export function MessageEditor(props: Props) {
           }
           updated = await res.json()
         } else {
-          // First save — create
           const res = await fetch('/api/messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -178,16 +171,11 @@ export function MessageEditor(props: Props) {
           }
           updated = await res.json()
           setId(updated.id)
-          // Replace the URL so refresh goes to /edit, not /new
           window.history.replaceState({}, '', `/dashboard/messages/${updated.id}/edit`)
         }
 
         setSavedAt(Date.now())
-        // The user just saved — this is now a real draft, not a provisional
-        // one. Don't delete it if they later cancel or navigate away.
         setShouldDeleteOnCancel(false)
-        // Snapshot the just-saved state so the back-to-shoebox check
-        // doesn't prompt to save again right after a save.
         setSavedSnapshot(
           buildSnapshot(
             recipientName,
@@ -218,12 +206,22 @@ export function MessageEditor(props: Props) {
       setError('Recipient name required.')
       return
     }
+    // Per-type body requirement before scheduling. Text types need content;
+    // media types need an uploaded blob URL.
     if (resolvedType === 'letter' && !content) {
       setError('Write something before scheduling.')
       return
     }
+    if (resolvedType === 'story' && !content) {
+      setError('Tell the story before scheduling.')
+      return
+    }
     if (resolvedType === 'video' && !mediaUrl) {
       setError('Record and save a video before scheduling.')
+      return
+    }
+    if (resolvedType === 'photo' && !mediaUrl) {
+      setError('Add a photo before scheduling.')
       return
     }
     setScheduling(true)
@@ -252,24 +250,6 @@ export function MessageEditor(props: Props) {
     }
   }
 
-  // Exit flow design (Adam's spec):
-  //
-  // Two exit paths, both behave the same when there's "nothing to lose":
-  //
-  // 1. Cancel button (at bottom, next to Save/Schedule/Send):
-  //    - Empty → just navigate
-  //    - Has content/video → confirm: "Discard? / Keep editing"
-  //
-  // 2. Back to shoebox link (top-left):
-  //    - Empty → just navigate
-  //    - Has content/video → 3-way dialog: "Save as draft / Discard / Keep editing"
-  //
-  // "Has content" means: any field has text, OR a video has been recorded
-  // (mediaUrl is set), OR there's a provisional draft from opening the camera.
-  //
-  // Existing scheduled/sent/archived messages always navigate without
-  // confirmation — those aren't drafts and editing here doesn't risk losing
-  // them; only the in-flight unsaved edits would be lost.
   const hasAnyContent = !!(
     recipientName ||
     recipientEmail ||
@@ -277,9 +257,6 @@ export function MessageEditor(props: Props) {
     content ||
     mediaUrl
   )
-  // Has anything changed since the last successful save? If the user just
-  // saved, the current state matches the snapshot and we don't prompt them
-  // to save again. The "back to shoebox" check uses this.
   const currentSnapshot = buildSnapshot(
     recipientName,
     recipientEmail,
@@ -291,35 +268,25 @@ export function MessageEditor(props: Props) {
   const hasUnsavedChanges = currentSnapshot !== savedSnapshot && hasAnyContent
   const hasProvisionalDraft = shouldDeleteOnCancel && !!id
 
-  // Helper that performs the actual cleanup + navigation
   const discardAndExit = async () => {
-    // If this was a provisional draft we created (camera open), delete it
     if (hasProvisionalDraft) {
       try {
         await fetch(`/api/messages/${id}`, { method: 'DELETE' })
-      } catch {
-        // best-effort; user is leaving anyway
-      }
+      } catch {/* best-effort */}
     }
-    // If editing an existing draft, leave it alone — only the unsaved
-    // edits get discarded, not the underlying draft.
     setAskCancel(false)
     setAskExit(false)
     router.push('/dashboard/messages')
   }
 
-  // Cancel button click — "discard or keep editing"
   const onCancelClick = () => {
     if (hasUnsavedChanges || hasProvisionalDraft) {
       setAskCancel(true)
     } else {
-      // Nothing to lose — just navigate. (Includes the case where the user
-      // saved and then clicked Cancel without further edits.)
       router.push('/dashboard/messages')
     }
   }
 
-  // Back-to-shoebox click — "save / discard / keep editing"
   const onBackClick = (e: React.MouseEvent) => {
     e.preventDefault()
     if (hasUnsavedChanges || hasProvisionalDraft) {
@@ -329,32 +296,40 @@ export function MessageEditor(props: Props) {
     }
   }
 
-  // Exit dialog "Save as draft" → save then navigate
   const saveAndExit = async () => {
     setAskExit(false)
     try {
       await save()
       router.push('/dashboard/messages')
-    } catch {
-      // error already set via setError; stay on page
+    } catch {/* error already set; stay on page */}
+  }
+
+  // Media uploaded callback — used by both VideoRecorder (video) and the
+  // photo input wrapper. Same payload shape for both, durationSec and
+  // trim fields unset for photos.
+  const onMediaUploaded = (info: {
+    url: string
+    blobPath: string
+    durationSec?: number
+    trimStartSec?: number | null
+    trimEndSec?: number | null
+  }) => {
+    setMediaUrl(info.url)
+    setMediaBlobPath(info.blobPath)
+    if (info.durationSec !== undefined) {
+      setMediaDurationSec(info.durationSec)
+    }
+    if (info.trimStartSec !== undefined) {
+      setMediaTrimStartSec(info.trimStartSec)
+    }
+    if (info.trimEndSec !== undefined) {
+      setMediaTrimEndSec(info.trimEndSec)
     }
   }
 
-  const onVideoUploaded = (info: { url: string; blobPath: string; durationSec: number }) => {
-    // Mirror the metadata in local state so subsequent saves include it.
-    // VideoRecorder also PATCHes these server-side immediately after upload,
-    // but having them in local state means Save Draft / Schedule / Send Now
-    // re-send them defensively.
-    setMediaUrl(info.url)
-    setMediaBlobPath(info.blobPath)
-    setMediaDurationSec(info.durationSec)
-  }
-
-  // For video mode in "new" state we need to ensure a draft exists before
-  // the recorder tries to call /api/messages/[id]/upload-url. If user picks
-  // video, we POST immediately to get an id — but only on demand when they
-  // click "Open camera". This creates a PROVISIONAL draft that we delete on
-  // cancel/exit unless the user explicitly saves.
+  // For media types in "new" state we need a draft id before any upload
+  // endpoint can be called. Creates a PROVISIONAL draft when the user is
+  // about to upload media — deleted on cancel unless explicitly saved.
   const ensureDraftId = async (): Promise<string | null> => {
     if (id) return id
     try {
@@ -366,7 +341,6 @@ export function MessageEditor(props: Props) {
       if (!res.ok) throw new Error('Could not start')
       const created = await res.json()
       setId(created.id)
-      // Mark this draft as provisional — delete on cancel unless saved
       setShouldDeleteOnCancel(true)
       window.history.replaceState({}, '', `/dashboard/messages/${created.id}/edit`)
       return created.id
@@ -386,13 +360,14 @@ export function MessageEditor(props: Props) {
 
   const today = new Date().toISOString().split('T')[0]
 
-  // Cancel-button dialog text — depends on what would be lost
   const cancelTitle = mediaUrl
-    ? 'Discard your video?'
+    ? resolvedType === 'photo' ? 'Discard your photo?' : 'Discard your video?'
     : 'Discard your changes?'
   const cancelMessage = mediaUrl
-    ? 'Your recording and anything you\u2019ve written here will be lost. This cannot be undone.'
+    ? 'Your media and anything you\u2019ve written here will be lost. This cannot be undone.'
     : 'Anything you haven\u2019t saved will be lost.'
+
+  const typeMeta = TYPE_LABELS[resolvedType]
 
   return (
     <div className="min-h-screen bg-[#f5f1e8] text-[#2c2416] relative overflow-x-hidden">
@@ -426,7 +401,7 @@ export function MessageEditor(props: Props) {
         </Link>
 
         <p className="text-[10px] md:text-xs tracking-[0.3em] md:tracking-[0.4em] uppercase text-[#8b6f3a] mb-3 md:mb-4">
-          · {resolvedType === 'video' ? 'A video message' : 'A letter'} ·
+          · {typeMeta.article} ·
         </p>
         <h1 className="font-serif text-3xl md:text-5xl leading-tight mb-8 md:mb-10">
           {recipientName
@@ -464,19 +439,30 @@ export function MessageEditor(props: Props) {
           />
         </Field>
 
-        <Field label={resolvedType === 'video' ? 'Your video' : 'Your letter'}>
-          {resolvedType === 'video' ? (
+        <Field label={fieldLabelForType(resolvedType)}>
+          {resolvedType === 'video' && (
             <VideoModeWrapper
               ensureDraftId={ensureDraftId}
               messageId={id}
               initialUrl={mediaUrl}
-              onUploaded={onVideoUploaded}
+              initialTrimStartSec={mediaTrimStartSec}
+              initialTrimEndSec={mediaTrimEndSec}
+              onUploaded={onMediaUploaded}
             />
-          ) : (
+          )}
+          {resolvedType === 'photo' && (
+            <PhotoModeWrapper
+              ensureDraftId={ensureDraftId}
+              messageId={id}
+              initialUrl={mediaUrl}
+              onUploaded={onMediaUploaded}
+            />
+          )}
+          {(resolvedType === 'letter' || resolvedType === 'story') && (
             <LetterEditor
               value={content}
               onChange={setContent}
-              placeholder={`Dear ${recipientName || 'loved one'},`}
+              placeholder={placeholderForType(resolvedType, recipientName)}
             />
           )}
         </Field>
@@ -521,9 +507,7 @@ export function MessageEditor(props: Props) {
               try {
                 await save()
                 router.push('/dashboard/messages')
-              } catch {
-                // error shown via setError; stay on page
-              }
+              } catch {/* stay on page */}
             }}
             disabled={saving}
             className="px-5 md:px-6 py-3 md:py-4 border border-[#2c2416] hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs md:text-sm tracking-[0.2em] uppercase disabled:opacity-50"
@@ -557,13 +541,12 @@ export function MessageEditor(props: Props) {
         onCancel={() => setAskCancel(false)}
       />
 
-      {/* Back-to-shoebox 3-button dialog: Save / Discard / Keep editing */}
       <ConfirmDialog
         open={askExit}
         title="Save your work?"
         message={
           mediaUrl
-            ? 'You have a recording and unsaved changes. Save them as a draft to come back to later, or discard them.'
+            ? 'You have media and unsaved changes. Save them as a draft to come back to later, or discard them.'
             : 'You have unsaved changes. Save them as a draft to come back to later, or discard them.'
         }
         confirmLabel="Save as draft"
@@ -587,20 +570,43 @@ export function MessageEditor(props: Props) {
   )
 }
 
-// VideoModeWrapper makes sure a draft id exists before the recorder can run
-// (the upload-url endpoint requires one). Renders a "begin recording" gate
-// in new mode until the user actually clicks, at which point we POST and
-// hand the id to VideoRecorder.
+// ────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────
+
+function fieldLabelForType(type: MessageType): string {
+  switch (type) {
+    case 'letter': return 'Your letter'
+    case 'video':  return 'Your video'
+    case 'photo':  return 'Your photo'
+    case 'story':  return 'Your story'
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// VideoModeWrapper — unchanged from Zip 2b (Zip 2c.1 added optional
+// recorder props, but for messages we use the legacy defaults).
+// ────────────────────────────────────────────────────────────
 function VideoModeWrapper({
   ensureDraftId,
   messageId,
   initialUrl,
+  initialTrimStartSec,
+  initialTrimEndSec,
   onUploaded,
 }: {
   ensureDraftId: () => Promise<string | null>
   messageId: string | null
   initialUrl: string | null
-  onUploaded: (info: { url: string; blobPath: string; durationSec: number }) => void
+  initialTrimStartSec: number | null
+  initialTrimEndSec: number | null
+  onUploaded: (info: {
+    url: string
+    blobPath: string
+    durationSec: number
+    trimStartSec: number | null
+    trimEndSec: number | null
+  }) => void
 }) {
   const [resolvedId, setResolvedId] = useState<string | null>(messageId)
   const [resolving, setResolving] = useState(false)
@@ -616,6 +622,8 @@ function VideoModeWrapper({
         messageId={resolvedId}
         onUploaded={onUploaded}
         initialVideoUrl={initialUrl}
+        initialTrimStartSec={initialTrimStartSec}
+        initialTrimEndSec={initialTrimEndSec}
       />
     )
   }
@@ -632,17 +640,190 @@ function VideoModeWrapper({
           setResolving(true)
           setErr(null)
           const id = await ensureDraftId()
-          if (id) {
-            setResolvedId(id)
-          } else {
-            setErr('Could not start. Try again.')
-          }
+          if (id) setResolvedId(id)
+          else setErr('Could not start. Try again.')
           setResolving(false)
         }}
         className="px-5 py-3 bg-[#2c2416] text-[#f5f1e8] hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
       >
         {resolving ? 'Preparing…' : 'Open camera'}
       </button>
+      {err && <p className="mt-3 text-xs text-[#c0392b] italic">{err}</p>}
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────
+// PhotoModeWrapper — new in Zip 2c.2.2. Parallel structure to
+// VideoModeWrapper: gates on draft id before allowing upload. Uses the
+// new /api/messages/[id]/upload-photo-url endpoint.
+// ────────────────────────────────────────────────────────────
+const ALLOWED_PHOTO_MIME = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+]
+const MAX_PHOTO_BYTES = 20 * 1024 * 1024
+
+function PhotoModeWrapper({
+  ensureDraftId,
+  messageId,
+  initialUrl,
+  onUploaded,
+}: {
+  ensureDraftId: () => Promise<string | null>
+  messageId: string | null
+  initialUrl: string | null
+  onUploaded: (info: { url: string; blobPath: string }) => void
+}) {
+  const [resolvedId, setResolvedId] = useState<string | null>(messageId)
+  const [resolving, setResolving] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [localPreview, setLocalPreview] = useState<string | null>(initialUrl)
+  const [err, setErr] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    setResolvedId(messageId)
+  }, [messageId])
+
+  useEffect(() => {
+    if (initialUrl) setLocalPreview(initialUrl)
+  }, [initialUrl])
+
+  const handlePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setErr(null)
+
+    const baseType = (file.type || '').split(';')[0].trim()
+    if (!ALLOWED_PHOTO_MIME.includes(baseType)) {
+      setErr(`Unsupported file type (${baseType}). Try JPG, PNG, or WebP.`)
+      return
+    }
+    if (file.size > MAX_PHOTO_BYTES) {
+      setErr(
+        `That photo is ${(file.size / 1024 / 1024).toFixed(1)} MB. Limit is ${MAX_PHOTO_BYTES / 1024 / 1024} MB.`
+      )
+      return
+    }
+
+    // Ensure draft exists before uploading
+    let id = resolvedId
+    if (!id) {
+      const newId = await ensureDraftId()
+      if (!newId) {
+        setErr('Could not start. Try again.')
+        return
+      }
+      id = newId
+      setResolvedId(newId)
+    }
+
+    // Show immediate preview while uploading
+    const blobLocal = URL.createObjectURL(file)
+    setLocalPreview(blobLocal)
+    setUploading(true)
+    try {
+      const ext = (baseType.split('/')[1] || 'jpg').replace('jpeg', 'jpg')
+      const filename = `messages/${id}/${Date.now()}.${ext}`
+      const blob = await upload(filename, file, {
+        access: 'public',
+        handleUploadUrl: `/api/messages/${id}/upload-photo-url`,
+        contentType: baseType,
+      })
+      // PATCH the message row so the URL is persisted even if the webhook
+      // (server-to-server) doesn't fire (e.g. localhost dev).
+      try {
+        await fetch(`/api/messages/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mediaUrl: blob.url,
+            mediaBlobPath: blob.pathname,
+          }),
+        })
+      } catch {/* webhook is the primary path; this is belt-and-suspenders */}
+      onUploaded({ url: blob.url, blobPath: blob.pathname })
+      setLocalPreview(blob.url)
+    } catch (err) {
+      setErr(`Upload failed: ${(err as Error).message}`)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ALLOWED_PHOTO_MIME.join(',')}
+        onChange={handlePick}
+        className="hidden"
+      />
+      {localPreview ? (
+        <div>
+          <div className="border border-[#2c2416]/15 bg-black overflow-hidden mb-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={localPreview}
+              alt="Your photo"
+              className="block w-full max-h-[60vh] object-contain mx-auto"
+            />
+          </div>
+          {uploading ? (
+            <p className="text-sm font-serif italic text-[#5c4d2e]">Uploading…</p>
+          ) : (
+            <button
+              type="button"
+              onClick={async () => {
+                setResolving(true)
+                if (!resolvedId) {
+                  const id = await ensureDraftId()
+                  if (id) setResolvedId(id)
+                }
+                setResolving(false)
+                fileInputRef.current?.click()
+              }}
+              disabled={resolving}
+              className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
+            >
+              ↻ Pick another
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="border border-dashed border-[#2c2416]/30 p-8 text-center">
+          <p className="font-serif italic text-[#5c4d2e] mb-4">
+            A picture worth keeping. JPG, PNG, or WebP — up to 20 MB.
+          </p>
+          <button
+            type="button"
+            disabled={resolving || uploading}
+            onClick={async () => {
+              setResolving(true)
+              if (!resolvedId) {
+                const id = await ensureDraftId()
+                if (!id) {
+                  setErr('Could not start. Try again.')
+                  setResolving(false)
+                  return
+                }
+                setResolvedId(id)
+              }
+              setResolving(false)
+              fileInputRef.current?.click()
+            }}
+            className="px-5 py-3 bg-[#2c2416] text-[#f5f1e8] hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+          >
+            {resolving ? 'Preparing…' : '↑ Choose a photo'}
+          </button>
+        </div>
+      )}
       {err && <p className="mt-3 text-xs text-[#c0392b] italic">{err}</p>}
     </div>
   )

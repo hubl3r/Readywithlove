@@ -69,6 +69,8 @@ export function ContributeForm({ token, contributorName }: Props) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [videoBlobPath, setVideoBlobPath] = useState<string | null>(null)
   const [videoDurationSec, setVideoDurationSec] = useState<number>(0)
+  const [videoTrimStartSec, setVideoTrimStartSec] = useState<number | null>(null)
+  const [videoTrimEndSec, setVideoTrimEndSec] = useState<number | null>(null)
 
   // Photo state
   const [photoUrl, setPhotoUrl] = useState<string | null>(null)
@@ -109,6 +111,8 @@ export function ContributeForm({ token, contributorName }: Props) {
             type === 'photo' ? photoBlobPath :
             undefined,
           mediaDurationSec: type === 'video' ? videoDurationSec : undefined,
+          mediaTrimStartSec: type === 'video' ? videoTrimStartSec : undefined,
+          mediaTrimEndSec: type === 'video' ? videoTrimEndSec : undefined,
           contributorNote: note.trim() || undefined,
         }),
       })
@@ -228,6 +232,8 @@ export function ContributeForm({ token, contributorName }: Props) {
                   setVideoUrl(info.url)
                   setVideoBlobPath(info.blobPath)
                   setVideoDurationSec(info.durationSec)
+                  setVideoTrimStartSec(info.trimStartSec)
+                  setVideoTrimEndSec(info.trimEndSec)
                 }}
               />
             )}
@@ -333,7 +339,13 @@ function VideoPanel({
   onUploaded,
 }: {
   token: string
-  onUploaded: (info: { url: string; blobPath: string; durationSec: number }) => void
+  onUploaded: (info: {
+    url: string
+    blobPath: string
+    durationSec: number
+    trimStartSec: number | null
+    trimEndSec: number | null
+  }) => void
 }) {
   return (
     <div>

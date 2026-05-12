@@ -4,7 +4,9 @@
 // - TTS uses SpeechSynthesis (widely supported)
 // - STT uses SpeechRecognition (Chrome/Edge/Safari only; Firefox doesn't)
 //
-// These are framework-agnostic — see useTTS/useSTT hooks for React versions.
+// Zip 2c.3: TTS now accepts a preferredVoiceURI and falls back to ranking.
+
+import { pickVoice, waitForVoices } from './voicePicker'
 
 export const TTS_SUPPORTED =
   typeof window !== 'undefined' && 'speechSynthesis' in window
@@ -15,21 +17,48 @@ export const STT_SUPPORTED =
 
 export interface SpeakOptions {
   text: string
-  rate?: number              // 0.1..10, default 1
+  rate?: number              // 0.1..10, default 0.95 (slightly slower than default — more natural for emotional content)
   pitch?: number             // 0..2, default 1
   voice?: SpeechSynthesisVoice
+  /**
+   * Stored voice URI (from Settings). If provided, the speak() helper
+   * will resolve it to a voice via voicePicker.pickVoice. Takes precedence
+   * over `voice` only when `voice` is undefined.
+   */
+  preferredVoiceURI?: string | null
   onEnd?: () => void
   onError?: (e: SpeechSynthesisErrorEvent) => void
 }
 
-export function speak({ text, rate, pitch, voice, onEnd, onError }: SpeakOptions): SpeechSynthesisUtterance | null {
+/**
+ * Speak some text. Auto-selects the best available voice unless overridden.
+ * Asynchronous because voice list loading is async on most browsers.
+ */
+export async function speak({
+  text,
+  rate = 0.95,
+  pitch = 1,
+  voice,
+  preferredVoiceURI,
+  onEnd,
+  onError,
+}: SpeakOptions): Promise<SpeechSynthesisUtterance | null> {
   if (!TTS_SUPPORTED) return null
-  // Always cancel anything currently playing — overlap is jarring.
+  // Always cancel anything currently playing — overlap is jarring
   window.speechSynthesis.cancel()
+
+  // Resolve voice. Caller may pass explicit voice, OR a preferred URI to
+  // look up, OR neither (use best ranked default).
+  let chosen: SpeechSynthesisVoice | null = voice ?? null
+  if (!chosen) {
+    const voices = await waitForVoices()
+    chosen = pickVoice(voices, preferredVoiceURI ?? null)
+  }
+
   const utt = new SpeechSynthesisUtterance(text)
-  if (rate) utt.rate = rate
-  if (pitch) utt.pitch = pitch
-  if (voice) utt.voice = voice
+  utt.rate = rate
+  utt.pitch = pitch
+  if (chosen) utt.voice = chosen
   if (onEnd) utt.onend = onEnd
   if (onError) utt.onerror = onError
   window.speechSynthesis.speak(utt)
@@ -50,7 +79,6 @@ export function listVoices(): SpeechSynthesisVoice[] {
 
 type SRConstructor = new () => SpeechRecognition
 
-// SpeechRecognition isn't in the standard DOM lib in TS yet — declare what we need.
 interface SpeechRecognition extends EventTarget {
   lang: string
   continuous: boolean

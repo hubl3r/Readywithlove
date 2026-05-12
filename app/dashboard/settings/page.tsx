@@ -4,6 +4,8 @@
 import { motion } from 'motion/react'
 import { useState, useEffect } from 'react'
 import { AppNav } from '@/components/AppNav'
+import { rankVoices, waitForVoices } from '@/lib/voicePicker'
+import { speak, stopSpeaking } from '@/lib/speech'
 
 interface Settings {
   pageTurnStyle: 'fade' | 'curl'
@@ -12,6 +14,7 @@ interface Settings {
   ttsEnabled: boolean
   sttEnabled: boolean
   reducedMotion: boolean
+  preferredVoiceURI: string | null
 }
 
 const FONT_SCALES: { id: Settings['fontScale']; label: string; size: string }[] = [
@@ -168,6 +171,16 @@ export default function SettingsPage() {
                 />
               </div>
             </Section>
+
+            {/* Zip 2c.3 — voice picker. Only useful when read-aloud is on,
+                but shown unconditionally so users can audition voices before
+                turning the feature on. */}
+            <Section title="Reading voice" caption="Pick how stories sound">
+              <VoicePicker
+                preferredVoiceURI={settings.preferredVoiceURI}
+                onChange={(uri) => update({ preferredVoiceURI: uri })}
+              />
+            </Section>
           </div>
         )}
       </main>
@@ -260,6 +273,113 @@ function Toggle({
           }`}
         />
       </button>
+    </div>
+  )
+}
+
+/**
+ * Voice picker. Loads voices async (browser quirk) and ranks them so the
+ * good ones float to the top. "Auto" is the default option — equivalent
+ * to storing null preferredVoiceURI, which makes pickVoice() return the
+ * highest-ranked available voice at speak time.
+ *
+ * Includes a preview button so users can audition the selected voice
+ * before committing.
+ */
+function VoicePicker({
+  preferredVoiceURI,
+  onChange,
+}: {
+  preferredVoiceURI: string | null
+  onChange: (uri: string | null) => void
+}) {
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
+  const [loading, setLoading] = useState(true)
+  const [previewing, setPreviewing] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    waitForVoices().then((list) => {
+      if (cancelled) return
+      setVoices(rankVoices(list))
+      setLoading(false)
+    })
+    return () => {
+      cancelled = true
+      stopSpeaking()
+    }
+  }, [])
+
+  const handlePreview = async () => {
+    if (previewing) {
+      stopSpeaking()
+      setPreviewing(false)
+      return
+    }
+    setPreviewing(true)
+    await speak({
+      text:
+        'This is how stories will sound. The light comes in through the window like it always has.',
+      preferredVoiceURI,
+      onEnd: () => setPreviewing(false),
+      onError: () => setPreviewing(false),
+    })
+  }
+
+  if (loading) {
+    return (
+      <p className="font-serif italic text-[#5c4d2e]">Loading voices…</p>
+    )
+  }
+
+  if (voices.length === 0) {
+    return (
+      <p className="font-serif italic text-[#5c4d2e]">
+        No voices were found in your browser. Read-aloud may not work on this device.
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-4 p-4 md:p-5 border border-[#2c2416]/15 bg-[#f5f1e8]/40">
+        <div className="flex-1">
+          <label
+            className="block font-serif text-base md:text-lg mb-1"
+            htmlFor="voice-select"
+          >
+            Voice
+          </label>
+          <p className="text-xs md:text-sm text-[#5c4d2e] font-light mb-3">
+            Auto picks the most natural-sounding voice your browser has.
+          </p>
+          <select
+            id="voice-select"
+            value={preferredVoiceURI ?? ''}
+            onChange={(e) => onChange(e.target.value || null)}
+            className="w-full bg-[#f5f1e8] border border-[#2c2416]/30 focus:border-[#8b6f3a] outline-none px-3 py-2 font-serif text-base text-[#2c2416]"
+          >
+            <option value="">Auto (best available)</option>
+            {voices.map((v) => (
+              <option key={v.voiceURI} value={v.voiceURI}>
+                {v.name} {v.default ? '(system default)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={handlePreview}
+          className="shrink-0 px-4 py-2 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-[10px] tracking-[0.2em] uppercase mt-7"
+        >
+          {previewing ? '■ Stop' : '▶ Preview'}
+        </button>
+      </div>
+      <p className="text-[10px] italic text-[#5c4d2e]/60">
+        Available voices depend on your browser and operating system. Apple
+        &ldquo;Enhanced&rdquo; voices, Microsoft &ldquo;Online (Natural)&rdquo; voices, and
+        Google voices tend to sound the most natural.
+      </p>
     </div>
   )
 }

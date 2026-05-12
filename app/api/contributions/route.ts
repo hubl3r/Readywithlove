@@ -1,33 +1,97 @@
 // app/api/contributions/route.ts
+import { auth } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { ensureUser } from '@/lib/userBootstrap'
 
 /**
- * Public POST — no auth required. The invite token IS the auth.
+ * Zip 2c.3 hotfix: restores the GET handler that was inadvertently dropped
+ * when 2c.3 added trim fields to POST (the file got rebuilt from the 2c.1
+ * base, which never had GET). Symptom: the "From others" tab returned 405
+ * on every request, the page interpreted the failure as "no contributions
+ * exist" and showed the empty state.
  *
- * Body:
- *   {
- *     token: string                  // the MessageInvite token
- *     type: 'letter'|'video'|'photo'|'story'
- *     content?: string               // for letter/story
- *     mediaUrl?: string              // for video/photo — set by upload flow
- *     mediaBlobPath?: string         // for video/photo
- *     mediaDurationSec?: number      // for video
- *     contributorNote?: string       // optional note attached to this contribution
- *   }
- *
- * Validates the token is active (not revoked, not expired), then creates a
- * Contribution row. Increments the invite's useCount and lastUsedAt.
- *
- * One token can produce multiple contributions (a contributor might leave
- * a letter AND a video). The contributor's name comes from the invite — we
- * don't ask them to type it again.
+ * - GET is Clerk-authed. Returns the signed-in user's contributions,
+ *   filterable by ?archived=true|false|all. Default: non-archived only.
+ * - POST stays public (token-gated). Accepts the 2c.3 trim fields.
  */
 
 const VALID_TYPES = new Set(['letter', 'video', 'photo', 'story'])
-const MAX_CONTENT_LENGTH = 20_000 // characters
+const MAX_CONTENT_LENGTH = 20_000
 const MAX_NOTE_LENGTH = 1000
 
+// ───────────────────────────────────────────────────────────
+// GET — list the signed-in user's contributions
+// ───────────────────────────────────────────────────────────
+export async function GET(request: Request) {
+  const { userId } = await auth()
+  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  await ensureUser(userId)
+
+  const url = new URL(request.url)
+  const archivedParam = url.searchParams.get('archived')
+  // Default: only show non-archived. Pass ?archived=true to get archived
+  // contributions. Pass ?archived=all to get everything (used by stats).
+  const archivedFilter =
+    archivedParam === 'true'
+      ? { archivedAt: { not: null } }
+      : archivedParam === 'all'
+        ? {} // no filter
+        : { archivedAt: null }
+
+  const contributions = await prisma.contribution.findMany({
+    where: {
+      userId,
+      ...archivedFilter,
+    },
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      type: true,
+      contributorName: true,
+      contributorNote: true,
+      content: true,
+      mediaUrl: true,
+      mediaBlobPath: true,
+      mediaDurationSec: true,
+      // Zip 2c.3: include trim fields so feed thumbnails / inline previews
+      // can also respect playback bounds when they want to.
+      mediaTrimStartSec: true,
+      mediaTrimEndSec: true,
+      viewedByUser: true,
+      archivedAt: true,
+      importedToTimelineItemId: true,
+      createdAt: true,
+      invite: {
+        select: { id: true, contributorEmail: true },
+      },
+    },
+  })
+
+  return NextResponse.json({
+    contributions: contributions.map((c) => ({
+      id: c.id,
+      type: c.type,
+      contributorName: c.contributorName,
+      contributorEmail: c.invite.contributorEmail,
+      contributorNote: c.contributorNote,
+      content: c.content,
+      mediaUrl: c.mediaUrl,
+      mediaDurationSec: c.mediaDurationSec,
+      mediaTrimStartSec: c.mediaTrimStartSec,
+      mediaTrimEndSec: c.mediaTrimEndSec,
+      viewedByUser: c.viewedByUser,
+      archivedAt: c.archivedAt?.toISOString() ?? null,
+      importedToTimelineItemId: c.importedToTimelineItemId,
+      createdAt: c.createdAt.toISOString(),
+    })),
+  })
+}
+
+// ───────────────────────────────────────────────────────────
+// POST — public submit (token-gated; no Clerk session)
+// ───────────────────────────────────────────────────────────
 export async function POST(request: Request) {
   let body: unknown
   try {
@@ -42,7 +106,17 @@ export async function POST(request: Request) {
   const content = typeof b.content === 'string' ? b.content : null
   const mediaUrl = typeof b.mediaUrl === 'string' ? b.mediaUrl : null
   const mediaBlobPath = typeof b.mediaBlobPath === 'string' ? b.mediaBlobPath : null
-  const mediaDurationSec = typeof b.mediaDurationSec === 'number' ? Math.round(b.mediaDurationSec) : null
+  const mediaDurationSec =
+    typeof b.mediaDurationSec === 'number' ? Math.round(b.mediaDurationSec) : null
+  // Zip 2c.3: trim handles for video playback. Null = no trim from that side.
+  const mediaTrimStartSec =
+    typeof b.mediaTrimStartSec === 'number' && b.mediaTrimStartSec >= 0
+      ? Math.round(b.mediaTrimStartSec)
+      : null
+  const mediaTrimEndSec =
+    typeof b.mediaTrimEndSec === 'number' && b.mediaTrimEndSec >= 0
+      ? Math.round(b.mediaTrimEndSec)
+      : null
   const contributorNote = typeof b.contributorNote === 'string' ? b.contributorNote.trim() : ''
 
   if (!token) {
@@ -52,7 +126,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unrecognized contribution type' }, { status: 400 })
   }
 
-  // Validate by type
   if (type === 'letter' || type === 'story') {
     if (!content || !content.trim()) {
       return NextResponse.json(
@@ -82,7 +155,6 @@ export async function POST(request: Request) {
     )
   }
 
-  // Validate the invite
   const invite = await prisma.messageInvite.findUnique({
     where: { token },
     select: {
@@ -103,7 +175,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'This invitation has expired' }, { status: 410 })
   }
 
-  // Create the contribution and bump the invite atomically
   const [contribution] = await prisma.$transaction([
     prisma.contribution.create({
       data: {
@@ -116,6 +187,8 @@ export async function POST(request: Request) {
         mediaUrl: type === 'video' || type === 'photo' ? mediaUrl : null,
         mediaBlobPath: type === 'video' || type === 'photo' ? mediaBlobPath : null,
         mediaDurationSec: type === 'video' ? mediaDurationSec : null,
+        mediaTrimStartSec: type === 'video' ? mediaTrimStartSec : null,
+        mediaTrimEndSec: type === 'video' ? mediaTrimEndSec : null,
       },
     }),
     prisma.messageInvite.update({

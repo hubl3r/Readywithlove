@@ -9,16 +9,19 @@ import { AppNav } from '@/components/AppNav'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { STATE_LABELS, type MessageState } from '@/lib/messageHelpers'
 import { formatLongDate } from '@/lib/dateFormat'
+import { useTrimmedVideo } from '@/lib/useTrimmedVideo'
 
 interface Message {
   id: string
   recipientName: string
   recipientEmail: string | null
-  type: 'letter' | 'video'
+  type: 'letter' | 'video' | 'photo' | 'story'
   subject: string | null
   content: string | null
   mediaUrl: string | null
   mediaDurationSec: number | null
+  mediaTrimStartSec: number | null
+  mediaTrimEndSec: number | null
   triggerDate: string | null
   state: MessageState
   sentAt: string | null
@@ -189,7 +192,7 @@ function Inner() {
         )}
 
         <p className="text-[10px] md:text-xs tracking-[0.3em] md:tracking-[0.4em] uppercase text-[#8b6f3a] mb-3 md:mb-4">
-          {msg.type === 'video' ? 'A video message' : 'A letter'} · {label.label}
+          {typeArticle(msg.type)} · {label.label}
         </p>
         <h1 className="font-serif text-3xl md:text-5xl leading-tight mb-2">
           For <span className="italic text-[#8b6f3a]">{msg.recipientName || 'someone'}</span>
@@ -208,15 +211,36 @@ function Inner() {
         )}
 
         <div className="mt-6 mb-8 md:mb-10">
-          {msg.type === 'video' ? (
+          {msg.type === 'video' && (
             msg.mediaUrl ? (
-              <video src={msg.mediaUrl} controls playsInline className="w-full bg-black" />
+              <TrimmedVideo
+                src={msg.mediaUrl}
+                trimStartSec={msg.mediaTrimStartSec}
+                trimEndSec={msg.mediaTrimEndSec}
+              />
             ) : (
               <p className="font-serif italic text-[#8b6f3a]">No video yet.</p>
             )
-          ) : (
+          )}
+          {msg.type === 'photo' && (
+            msg.mediaUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={msg.mediaUrl}
+                alt={msg.subject || msg.recipientName || 'Photo message'}
+                className="block w-full max-h-[70vh] object-contain mx-auto bg-black border border-[#2c2416]/10"
+              />
+            ) : (
+              <p className="font-serif italic text-[#8b6f3a]">No photo yet.</p>
+            )
+          )}
+          {(msg.type === 'letter' || msg.type === 'story') && (
             <div className="bg-[#f5f1e8]/80 border border-[#2c2416]/10 p-6 md:p-10 font-serif text-base md:text-lg leading-relaxed whitespace-pre-wrap text-[#2c2416]">
-              {msg.content || <span className="italic text-[#8b6f3a]/60">No body yet…</span>}
+              {msg.content || (
+                <span className="italic text-[#8b6f3a]/60">
+                  {msg.type === 'letter' ? 'No letter yet…' : 'No story yet…'}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -306,5 +330,40 @@ function Inner() {
         onCancel={() => setAskDelete(false)}
       />
     </div>
+  )
+}
+
+function typeArticle(type: 'letter' | 'video' | 'photo' | 'story'): string {
+  switch (type) {
+    case 'letter': return 'A letter'
+    case 'video':  return 'A video message'
+    case 'photo':  return 'A photo'
+    case 'story':  return 'A story'
+  }
+}
+
+/**
+ * Tiny inline wrapper that pairs the trim hook with a <video> element.
+ * The hook reads the trim values and enforces them via loadedmetadata
+ * + timeupdate listeners. Blob is full-length; experience is trimmed.
+ */
+function TrimmedVideo({
+  src,
+  trimStartSec,
+  trimEndSec,
+}: {
+  src: string
+  trimStartSec: number | null
+  trimEndSec: number | null
+}) {
+  const ref = useTrimmedVideo(trimStartSec, trimEndSec)
+  return (
+    <video
+      ref={ref}
+      src={src}
+      controls
+      playsInline
+      className="w-full bg-black"
+    />
   )
 }

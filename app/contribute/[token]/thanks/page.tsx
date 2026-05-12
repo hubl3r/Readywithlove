@@ -1,19 +1,20 @@
 // app/contribute/[token]/thanks/page.tsx
 import Link from 'next/link'
 import { prisma } from '@/lib/prisma'
+import { ThanksList } from './ThanksList'
 
 export const metadata = {
   title: 'Thank you · ReadyWithLove',
 }
 
 /**
- * Confirmation screen after a contribution is submitted. We re-look-up the
- * invite to personalize the message (inviter name), but never block on it —
- * if the invite is gone for some reason, we still thank the contributor.
+ * Server-rendered shell. Fetches the invite to personalize the headline,
+ * then hands off to ThanksList (client) which loads the actual list of
+ * contributions and ticks the edit-window countdown live.
  *
- * Importantly, the invite is still valid here (not revoked/expired by virtue
- * of just having been used). The contributor can return and add more if they
- * like — there's a link back to the contribute page.
+ * We don't pre-fetch the contributions list on the server because the
+ * client component needs to manage state on it anyway (deletes, edits,
+ * countdown updates). One fetch on mount vs. two trips of the same data.
  */
 export default async function ThanksPage({
   params,
@@ -64,29 +65,38 @@ export default async function ThanksPage({
         </Link>
       </header>
 
-      <main className="relative z-10 max-w-[800px] mx-auto px-5 md:px-12 py-16 md:py-24 text-center">
-        <p className="text-[10px] md:text-xs tracking-[0.3em] md:tracking-[0.4em] uppercase text-[#8b6f3a] mb-4 md:mb-6">
-          · Received ·
-        </p>
-        <h1 className="font-serif text-4xl md:text-6xl leading-tight mb-5 md:mb-7">
-          Thank you.
-        </h1>
-        <p className="font-serif italic text-lg md:text-2xl text-[#5c4d2e] mb-3 md:mb-4 max-w-xl mx-auto">
-          {inviterName === 'them' ? 'It’s safely in the shoebox.' : `It’s safely in ${inviterName}’s shoebox.`}
-        </p>
-        <p className="text-base md:text-lg text-[#5c4d2e] font-light max-w-xl mx-auto mb-10 md:mb-14">
-          What you shared will be kept and carried forward. Whenever it’s the
-          right time for {inviterName === 'them' ? 'them' : inviterName} to see it, they will.
-        </p>
+      <main className="relative z-10 max-w-[900px] mx-auto px-5 md:px-12 py-12 md:py-16">
+        <div className="text-center mb-12 md:mb-16">
+          <p className="text-[10px] md:text-xs tracking-[0.3em] md:tracking-[0.4em] uppercase text-[#8b6f3a] mb-4 md:mb-6">
+            · Received ·
+          </p>
+          <h1 className="font-serif text-4xl md:text-6xl leading-tight mb-5 md:mb-7">
+            Thank you.
+          </h1>
+          <p className="font-serif italic text-lg md:text-2xl text-[#5c4d2e] mb-3 md:mb-4 max-w-xl mx-auto">
+            {inviterName === 'them'
+              ? 'It’s safely in the shoebox.'
+              : `It’s safely in ${inviterName}’s shoebox.`}
+          </p>
+          <p className="text-base md:text-lg text-[#5c4d2e] font-light max-w-xl mx-auto">
+            What you’ve shared will be kept and carried forward. Whenever
+            it’s the right time for {inviterName === 'them' ? 'them' : inviterName} to see it,
+            they will.
+          </p>
+        </div>
+
+        <ThanksList token={token} inviterName={inviterName} />
 
         {stillActive && (
-          <Link
-            href={`/contribute/${token}`}
-            className="inline-flex items-center gap-2 border border-[#2c2416] text-[#2c2416] px-6 md:px-8 py-3 md:py-4 hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs tracking-[0.2em] uppercase"
-          >
-            Add another memory
-            <span>+</span>
-          </Link>
+          <div className="mt-12 md:mt-16 text-center">
+            <Link
+              href={`/contribute/${token}`}
+              className="inline-flex items-center gap-2 border border-[#2c2416] text-[#2c2416] px-6 md:px-8 py-3 md:py-4 hover:bg-[#2c2416] hover:text-[#f5f1e8] transition text-xs tracking-[0.2em] uppercase"
+            >
+              Add another memory
+              <span>+</span>
+            </Link>
+          </div>
         )}
       </main>
 

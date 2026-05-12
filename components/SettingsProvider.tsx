@@ -14,8 +14,11 @@ export interface AppSettings {
   ttsEnabled: boolean
   sttEnabled: boolean
   reducedMotion: boolean
+  /** Zip 2c.3 — preferred TTS voice (voiceURI string), null = auto-pick */
+  preferredVoiceURI: string | null
 }
 
+// Defaults for signed-in users on first run. Match the API's create defaults.
 const DEFAULT_SETTINGS: AppSettings = {
   pageTurnStyle: 'fade',
   fontScale: 'normal',
@@ -23,6 +26,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   ttsEnabled: false,
   sttEnabled: false,
   reducedMotion: false,
+  preferredVoiceURI: null,
+}
+
+// Defaults for UNAUTHED users (contributors on /contribute/[token]).
+// Per Zip 2c.3 spec: TTS/STT always on for contributors so they can use
+// read-aloud and dictation without needing a setting they don't have access to.
+const CONTRIBUTOR_DEFAULTS: AppSettings = {
+  ...DEFAULT_SETTINGS,
+  ttsEnabled: true,
+  sttEnabled: true,
 }
 
 interface SettingsContextValue {
@@ -45,9 +58,9 @@ export function useSettings() {
  * Wraps the app, fetches the signed-in user's settings, applies them globally
  * via data-* attributes on <html>, and exposes them to children.
  *
- * Why data attributes instead of CSS variables here: it lets the CSS in
- * globals.css drive both font-scale AND high-contrast theming without React
- * needing to touch every element.
+ * For unauthed visitors (contributors), we apply CONTRIBUTOR_DEFAULTS instead
+ * of DEFAULT_SETTINGS. This is what makes TTS/STT always-available on the
+ * contribute page without needing toggles they can't see.
  */
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const { isSignedIn, isLoaded } = useAuth()
@@ -56,14 +69,16 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
 
   const fetchSettings = useCallback(async () => {
     if (!isSignedIn) {
-      setSettings(DEFAULT_SETTINGS)
+      // Unauthed = contributor flow. Give them the always-on defaults so
+      // LetterEditor's TTS/STT buttons appear.
+      setSettings(CONTRIBUTOR_DEFAULTS)
       setLoading(false)
       return
     }
     try {
       const res = await fetch('/api/settings')
       if (res.ok) {
-        const data = (await res.json()) as AppSettings
+        const data = (await res.json()) as Partial<AppSettings>
         setSettings({ ...DEFAULT_SETTINGS, ...data })
       }
     } catch (err) {

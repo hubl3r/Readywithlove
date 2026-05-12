@@ -21,6 +21,32 @@ export const STATE_LABELS: Record<MessageState, { label: string; tone: 'neutral'
   archived:         { label: 'Archived',         tone: 'neutral' },
 }
 
+// Message types — expanded in Zip 2c.2.2 to match the four contribution
+// types. Letters and stories share storage shape (both use `content`),
+// videos and photos both use mediaUrl/mediaBlobPath. The only schema
+// difference is mediaDurationSec applies only to video.
+export const MESSAGE_TYPES = ['letter', 'video', 'photo', 'story'] as const
+export type MessageType = (typeof MESSAGE_TYPES)[number]
+
+export const TYPE_LABELS: Record<MessageType, { label: string; article: string; icon: string }> = {
+  letter: { label: 'Letter', article: 'A letter',       icon: '✎' },
+  video:  { label: 'Video',  article: 'A video message', icon: '●' },
+  photo:  { label: 'Photo',  article: 'A photo',         icon: '◇' },
+  story:  { label: 'Story',  article: 'A story',         icon: '❦' },
+}
+
+/**
+ * Whether a message type uses text content (letter, story) vs media (video, photo).
+ * Used in validation: text types require non-empty `content`; media types
+ * require non-empty `mediaUrl`.
+ */
+export function isTextType(type: MessageType | string): type is 'letter' | 'story' {
+  return type === 'letter' || type === 'story'
+}
+export function isMediaType(type: MessageType | string): type is 'video' | 'photo' {
+  return type === 'video' || type === 'photo'
+}
+
 /**
  * Generate a URL-safe random token for delivery and approval links.
  * 32 bytes of randomness, base64url-encoded (no padding) — about 43 chars.

@@ -4,6 +4,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSettings } from '@/components/SettingsProvider'
 import { speak, stopSpeaking, createRecognizer, TTS_SUPPORTED, STT_SUPPORTED } from '@/lib/speech'
+import { applySpokenPunctuation, capitalizeFirst } from '@/lib/dictationCleanup'
 
 interface LetterEditorProps {
   value: string
@@ -30,9 +31,13 @@ export function LetterEditor({
   const { settings } = useSettings()
   const [reading, setReading] = useState(false)
   const [dictating, setDictating] = useState(false)
+  const [cleaningUp, setCleaningUp] = useState(false)
+  const [cleanupMsg, setCleanupMsg] = useState<string | null>(null)
   const recognizerRef = useRef<SpeechRecognitionLite | null>(null)
 
-  // STT: append finalized transcript chunks to the textarea
+  // STT: append finalized transcript chunks to the textarea.
+  // Zip 2c.3: every final chunk runs through applySpokenPunctuation so
+  // users can say "comma" or "new paragraph" and get the right mark.
   const startDictation = () => {
     const rec = createRecognizer() as unknown as SpeechRecognitionLite | null
     if (!rec) return
@@ -43,7 +48,6 @@ export function LetterEditor({
     let lastFinalLen = accumulated.length
 
     rec.onresult = (ev: Event) => {
-      // SpeechRecognitionEvent — narrowed shape
       const e = ev as unknown as {
         resultIndex: number
         results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>
@@ -56,10 +60,16 @@ export function LetterEditor({
         else interim += r[0].transcript
       }
       if (finalText) {
-        // Append final text + a space, then mark a checkpoint so interim doesn't pile on
-        accumulated = (accumulated.slice(0, lastFinalLen) + (lastFinalLen ? ' ' : '') + finalText).trimStart()
+        // Apply spoken-punctuation rules to the finalized chunk
+        const cleaned = applySpokenPunctuation(finalText)
+        // Capitalize the first char if this is the first content
+        const toAppend = !lastFinalLen ? capitalizeFirst(cleaned.trimStart()) : cleaned
+        const sep = lastFinalLen && !accumulated.endsWith('\n') && !cleaned.startsWith('\n') ? ' ' : ''
+        accumulated = (accumulated.slice(0, lastFinalLen) + sep + toAppend).trimStart()
         lastFinalLen = accumulated.length
       }
+      // For interim text, don't transform — would feel weird to see "comma"
+      // disappear mid-display. Spoken punctuation only fires on final.
       const next = interim
         ? `${accumulated}${accumulated && interim ? ' ' : ''}${interim}`
         : accumulated
@@ -76,7 +86,7 @@ export function LetterEditor({
     setDictating(false)
   }
 
-  const toggleRead = () => {
+  const toggleRead = async () => {
     if (reading) {
       stopSpeaking()
       setReading(false)
@@ -84,11 +94,44 @@ export function LetterEditor({
     }
     if (!value.trim()) return
     setReading(true)
-    speak({
+    await speak({
       text: value,
+      preferredVoiceURI: settings.preferredVoiceURI,
       onEnd: () => setReading(false),
       onError: () => setReading(false),
     })
+  }
+
+  // AI cleanup — sends text to the locked-down /api/ai/cleanup-text endpoint.
+  // Works for both authed users and unauthed contributors.
+  const runCleanup = async () => {
+    if (!value.trim() || cleaningUp) return
+    setCleaningUp(true)
+    setCleanupMsg(null)
+    try {
+      const res = await fetch('/api/ai/cleanup-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: value }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setCleanupMsg(data.error || 'Cleanup failed')
+        return
+      }
+      if (data.changed === false) {
+        setCleanupMsg('No changes suggested.')
+      } else {
+        onChange(data.text)
+        setCleanupMsg('Cleaned up.')
+        // Clear the success message after a moment
+        setTimeout(() => setCleanupMsg(null), 2500)
+      }
+    } catch {
+      setCleanupMsg('Could not reach the cleanup service.')
+    } finally {
+      setCleaningUp(false)
+    }
   }
 
   // Stop everything on unmount
@@ -131,18 +174,38 @@ export function LetterEditor({
             {dictating ? '● Listening… click to stop' : '🎙 Dictate'}
           </button>
         )}
+
+        {/* AI cleanup button — always shown (no setting gate, since it's
+            also useful for unauth contributors). Only enabled when there's
+            text to clean up. */}
+        <button
+          type="button"
+          onClick={runCleanup}
+          disabled={!value.trim() || cleaningUp}
+          title="Use AI to clean up punctuation and grammar"
+          className="text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a] hover:text-[#2c2416] disabled:opacity-30 transition"
+        >
+          {cleaningUp ? '✨ Cleaning up…' : '✨ Polish with AI'}
+        </button>
+
+        {cleanupMsg && (
+          <span className="text-[10px] italic text-[#5c4d2e]/80">{cleanupMsg}</span>
+        )}
+
         {settings.ttsEnabled && !TTS_SUPPORTED && (
           <span className="text-[10px] italic text-[#5c4d2e]/60">read-aloud not supported in this browser</span>
         )}
         {settings.sttEnabled && !STT_SUPPORTED && (
           <span className="text-[10px] italic text-[#5c4d2e]/60">dictation not supported in this browser</span>
         )}
-        {(!settings.ttsEnabled && !settings.sttEnabled) && (
-          <span className="text-[10px] italic text-[#5c4d2e]/40">
-            Enable read-aloud or dictation in Settings to use here
-          </span>
-        )}
       </div>
+
+      {sttAvailable && (
+        <p className="mt-2 text-[10px] italic text-[#8b6f3a]/60">
+          Tip: say &ldquo;comma,&rdquo; &ldquo;period,&rdquo; &ldquo;new paragraph,&rdquo; or
+          &ldquo;question mark&rdquo; to insert punctuation as you dictate.
+        </p>
+      )}
     </div>
   )
 }
