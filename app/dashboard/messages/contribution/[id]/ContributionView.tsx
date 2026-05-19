@@ -16,6 +16,8 @@ interface Contribution {
   contributorEmail: string | null
   contributorNote: string | null
   inviteMessage: string | null
+  inviteId: string
+  inviteRevokedAt: string | null
   content: string | null
   mediaUrl: string | null
   mediaDurationSec: number | null
@@ -24,6 +26,7 @@ interface Contribution {
   viewedByUser: boolean
   archivedAt: string | null
   importedToTimelineItemId: string | null
+  importedToTimelineDate: string | null
   createdAt: string
 }
 
@@ -42,11 +45,14 @@ export function ContributionView({
   const router = useRouter()
   const [contribution, setContribution] = useState<Contribution>(initial)
   const [confirmArchive, setConfirmArchive] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmRevoke, setConfirmRevoke] = useState(false)
   const [pending, setPending] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const isArchived = !!contribution.archivedAt
   const isImported = !!contribution.importedToTimelineItemId
+  const isInviteRevoked = !!contribution.inviteRevokedAt
 
   // Fire-and-forget: hit the API GET so server-side viewedByUser flips to
   // true. We already set the local state visually below; this just makes
@@ -83,10 +89,59 @@ export function ContributionView({
   }
 
   const handleImport = () => {
-    // Pre-fill the Timeline new-item form by passing the contribution id
-    // in the query string. The timeline page will GET the contribution and
-    // populate the form on mount.
     router.push(`/dashboard/timeline?prefill=${contribution.id}`)
+  }
+
+  /**
+   * Zip 2c.4: hard-delete this contribution. Removes the row + blob + the
+   * invite's useCount decrement, then routes back to the contributions feed.
+   */
+  const handleDelete = async () => {
+    setPending(true)
+    setErrorMsg(null)
+    try {
+      const res = await fetch(`/api/contributions/${contribution.id}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j.error || 'Could not delete')
+      }
+      router.push('/dashboard/contributions')
+    } catch (err) {
+      setErrorMsg((err as Error).message)
+      setPending(false)
+      setConfirmDelete(false)
+    }
+  }
+
+  /**
+   * Zip 2c.4: revoke the underlying invite. Existing contributions stay
+   * (they're real memories — we're not deleting history), but no new ones
+   * can be submitted through that link. The button on this view exists
+   * so users don't have to navigate back to the invites page to do it.
+   */
+  const handleRevokeInvite = async () => {
+    setPending(true)
+    setErrorMsg(null)
+    try {
+      const res = await fetch(`/api/invites/${contribution.inviteId}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j.error || 'Could not revoke')
+      }
+      setContribution((c) => ({
+        ...c,
+        inviteRevokedAt: new Date().toISOString(),
+      }))
+    } catch (err) {
+      setErrorMsg((err as Error).message)
+    } finally {
+      setPending(false)
+      setConfirmRevoke(false)
+    }
   }
 
   const typeMeta = TYPE_LABELS[contribution.type]
@@ -223,7 +278,7 @@ export function ContributionView({
             )}
             {isImported && (
               <span className="px-5 md:px-6 py-3 border border-green-700/30 text-green-700 text-xs tracking-[0.2em] uppercase italic">
-                ✓ Added to your timeline
+                ✓ Added to {formatImportedYear(contribution.importedToTimelineDate)}
               </span>
             )}
             {!isArchived ? (
@@ -243,6 +298,28 @@ export function ContributionView({
                 {pending ? 'Restoring…' : 'Restore'}
               </button>
             )}
+            {!isInviteRevoked && (
+              <button
+                onClick={() => setConfirmRevoke(true)}
+                disabled={pending}
+                className="px-5 md:px-6 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+                title="Block further contributions from this person via this invite"
+              >
+                Revoke invitation
+              </button>
+            )}
+            {isInviteRevoked && (
+              <span className="px-5 md:px-6 py-3 border border-[#5c4d2e]/30 text-[#5c4d2e] text-xs tracking-[0.2em] uppercase italic">
+                Invitation revoked
+              </span>
+            )}
+            <button
+              onClick={() => setConfirmDelete(true)}
+              disabled={pending}
+              className="px-5 md:px-6 py-3 border border-[#c0392b]/40 text-[#c0392b] hover:bg-[#c0392b]/5 transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+            >
+              Delete
+            </button>
           </div>
         </motion.div>
       </main>
@@ -260,8 +337,44 @@ export function ContributionView({
         onConfirm={() => setArchived(true)}
         onCancel={() => setConfirmArchive(false)}
       />
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete this contribution?"
+        message={
+          `This will permanently delete this ${typeMeta.label.toLowerCase()} from ` +
+          `${contribution.contributorName}. ${contribution.contributorName} will not ` +
+          `be notified. This cannot be undone.`
+        }
+        confirmLabel={pending ? 'Deleting…' : 'Delete forever'}
+        cancelLabel="Keep"
+        tone="danger"
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmDelete(false)}
+      />
+
+      <ConfirmDialog
+        open={confirmRevoke}
+        title={`Revoke ${contribution.contributorName}'s invitation?`}
+        message={
+          `They won't be able to send any more memories through this invitation. ` +
+          `Their existing contributions stay with you. You can issue them a new ` +
+          `invitation any time from the invitations page.`
+        }
+        confirmLabel={pending ? 'Revoking…' : 'Revoke'}
+        cancelLabel="Keep active"
+        tone="danger"
+        onConfirm={handleRevokeInvite}
+        onCancel={() => setConfirmRevoke(false)}
+      />
     </div>
   )
+}
+
+function formatImportedYear(iso: string | null): string {
+  if (!iso) return 'your timeline'
+  const d = new Date(iso)
+  return String(d.getFullYear())
 }
 
 function formatLong(iso: string): string {
