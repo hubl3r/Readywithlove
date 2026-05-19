@@ -445,6 +445,7 @@ export function MessageEditor(props: Props) {
               ensureDraftId={ensureDraftId}
               messageId={id}
               initialUrl={mediaUrl}
+              initialDurationSec={mediaDurationSec}
               initialTrimStartSec={mediaTrimStartSec}
               initialTrimEndSec={mediaTrimEndSec}
               onUploaded={onMediaUploaded}
@@ -591,6 +592,7 @@ function VideoModeWrapper({
   ensureDraftId,
   messageId,
   initialUrl,
+  initialDurationSec,
   initialTrimStartSec,
   initialTrimEndSec,
   onUploaded,
@@ -598,6 +600,7 @@ function VideoModeWrapper({
   ensureDraftId: () => Promise<string | null>
   messageId: string | null
   initialUrl: string | null
+  initialDurationSec: number | null
   initialTrimStartSec: number | null
   initialTrimEndSec: number | null
   onUploaded: (info: {
@@ -622,6 +625,7 @@ function VideoModeWrapper({
         messageId={resolvedId}
         onUploaded={onUploaded}
         initialVideoUrl={initialUrl}
+        initialDurationSec={initialDurationSec}
         initialTrimStartSec={initialTrimStartSec}
         initialTrimEndSec={initialTrimEndSec}
       />

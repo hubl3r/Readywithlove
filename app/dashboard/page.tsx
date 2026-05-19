@@ -70,7 +70,7 @@ export default function Dashboard() {
       title: 'Contributions',
       subtitle: 'From those who love you',
       desc: 'Memories, letters, and stories shared with you by others.',
-      href: '/dashboard/messages?tab=received',
+      href: '/dashboard/contributions',
       stat: stats.contributionCount === 0
         ? 'None yet'
         : stats.unviewedContributionCount > 0

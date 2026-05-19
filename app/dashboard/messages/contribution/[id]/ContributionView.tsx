@@ -283,14 +283,52 @@ function TrimmedVideo({
   trimEndSec: number | null
 }) {
   const ref = useTrimmedVideo(trimStartSec, trimEndSec)
+  const hasTrim = trimStartSec !== null || trimEndSec !== null
+
+  const handleRestart = () => {
+    const el = ref.current
+    if (!el) return
+    try {
+      el.currentTime = trimStartSec ?? 0
+      el.play().catch(() => {/* ignore */})
+    } catch { /* ignore */ }
+  }
+
   return (
-    /* eslint-disable-next-line jsx-a11y/media-has-caption */
-    <video
-      ref={ref}
-      src={src}
-      controls
-      playsInline
-      className="block w-full max-h-[70vh] mx-auto"
-    />
+    <div>
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <video
+        ref={ref}
+        src={src}
+        controls
+        playsInline
+        className="block w-full max-h-[70vh] mx-auto"
+      />
+      {hasTrim && (
+        <div className="flex justify-between items-center mt-2 px-1">
+          <button
+            onClick={handleRestart}
+            className="text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a] hover:text-[#2c2416] transition"
+          >
+            ↺ Restart
+          </button>
+          <p className="text-[10px] italic text-[#5c4d2e]/60">
+            Plays {formatTrimRange(trimStartSec, trimEndSec)}
+          </p>
+        </div>
+      )}
+    </div>
   )
+}
+
+function formatTrimRange(start: number | null, end: number | null): string {
+  const fmt = (s: number) => {
+    const m = Math.floor(s / 60)
+    const r = Math.floor(s % 60)
+    return `${m}:${r.toString().padStart(2, '0')}`
+  }
+  if (start !== null && end !== null) return `from ${fmt(start)} to ${fmt(end)}`
+  if (start !== null) return `from ${fmt(start)}`
+  if (end !== null) return `up to ${fmt(end)}`
+  return ''
 }

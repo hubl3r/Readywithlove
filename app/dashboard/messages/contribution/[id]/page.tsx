@@ -48,16 +48,25 @@ export default async function ContributionPage({
       importedToTimelineItemId: true,
       createdAt: true,
       invite: {
-        select: { contributorEmail: true, message: true },
+        select: { id: true, contributorEmail: true, message: true, revokedAt: true },
       },
     },
   })
 
   if (!contribution || contribution.userId !== userId) {
     notFound()
-    // notFound() throws, so this is unreachable — but the explicit return
-    // helps TS narrow the type below.
     return null
+  }
+
+  // Zip 2c.4: fetch the timeline item's date so the view can show
+  // "✓ Added to 1975" when already imported.
+  let importedToTimelineDate: string | null = null
+  if (contribution.importedToTimelineItemId) {
+    const item = await prisma.timelineItem.findUnique({
+      where: { id: contribution.importedToTimelineItemId },
+      select: { date: true },
+    })
+    if (item) importedToTimelineDate = item.date.toISOString()
   }
 
   return (
@@ -69,6 +78,8 @@ export default async function ContributionPage({
         contributorEmail: contribution.invite.contributorEmail,
         contributorNote: contribution.contributorNote,
         inviteMessage: contribution.invite.message,
+        inviteId: contribution.invite.id,
+        inviteRevokedAt: contribution.invite.revokedAt?.toISOString() ?? null,
         content: contribution.content,
         mediaUrl: contribution.mediaUrl,
         mediaDurationSec: contribution.mediaDurationSec,
@@ -77,6 +88,7 @@ export default async function ContributionPage({
         viewedByUser: contribution.viewedByUser,
         archivedAt: contribution.archivedAt?.toISOString() ?? null,
         importedToTimelineItemId: contribution.importedToTimelineItemId,
+        importedToTimelineDate,
         createdAt: contribution.createdAt.toISOString(),
       }}
     />

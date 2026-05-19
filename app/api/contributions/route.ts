@@ -55,8 +55,6 @@ export async function GET(request: Request) {
       mediaUrl: true,
       mediaBlobPath: true,
       mediaDurationSec: true,
-      // Zip 2c.3: include trim fields so feed thumbnails / inline previews
-      // can also respect playback bounds when they want to.
       mediaTrimStartSec: true,
       mediaTrimEndSec: true,
       viewedByUser: true,
@@ -68,6 +66,21 @@ export async function GET(request: Request) {
       },
     },
   })
+
+  // Zip 2c.4: batch-fetch the dates of imported timeline items so cards
+  // can show "✓ Added to 1975". One round-trip for all of them; safer
+  // than N+1 from the map.
+  const importedIds = contributions
+    .map((c) => c.importedToTimelineItemId)
+    .filter((id): id is string => !!id)
+  const importedDates = new Map<string, Date>()
+  if (importedIds.length > 0) {
+    const items = await prisma.timelineItem.findMany({
+      where: { id: { in: importedIds } },
+      select: { id: true, date: true },
+    })
+    for (const item of items) importedDates.set(item.id, item.date)
+  }
 
   return NextResponse.json({
     contributions: contributions.map((c) => ({
@@ -84,6 +97,9 @@ export async function GET(request: Request) {
       viewedByUser: c.viewedByUser,
       archivedAt: c.archivedAt?.toISOString() ?? null,
       importedToTimelineItemId: c.importedToTimelineItemId,
+      importedToTimelineDate: c.importedToTimelineItemId
+        ? (importedDates.get(c.importedToTimelineItemId)?.toISOString() ?? null)
+        : null,
       createdAt: c.createdAt.toISOString(),
     })),
   })

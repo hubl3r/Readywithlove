@@ -7,6 +7,7 @@ import { motion } from 'motion/react'
 import { upload } from '@vercel/blob/client'
 import { LetterEditor } from '@/components/LetterEditor'
 import { VideoRecorder } from '@/components/VideoRecorder'
+import { TrimSlider } from '@/components/TrimSlider'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
   computeLockStatus,
@@ -63,6 +64,10 @@ export function SentReview({
   // Edit-mode local state — only relevant while editing
   const [draftContent, setDraftContent] = useState(initial.content ?? '')
   const [draftNote, setDraftNote] = useState(initial.contributorNote ?? '')
+  // Zip 2c.5: trim is editable independently of media. Initialized from the
+  // contribution, edited in-place, persisted via the existing PATCH body.
+  const [draftTrimStart, setDraftTrimStart] = useState<number | null>(initial.mediaTrimStartSec)
+  const [draftTrimEnd, setDraftTrimEnd] = useState<number | null>(initial.mediaTrimEndSec)
   const [pendingMedia, setPendingMedia] = useState<{
     url: string
     blobPath: string
@@ -116,10 +121,22 @@ export function SentReview({
           body.mediaDurationSec = pendingMedia.durationSec
         }
         if (contribution.type === 'video') {
-          // Send trim values even when null — replacing media should reset
-          // any prior trim. Null is a valid "no trim from this side" state.
+          // Replacing media: use the trim values from the fresh recording
+          // (which the VideoRecorder set as it uploaded). These can be null.
           body.mediaTrimStartSec = pendingMedia.trimStartSec ?? null
           body.mediaTrimEndSec = pendingMedia.trimEndSec ?? null
+        }
+      } else if (contribution.type === 'video') {
+        // Zip 2c.5: no new media, but the contributor may have edited the
+        // trim independently. Send the draft values so trim-only changes
+        // persist. Compares to current contribution to avoid no-op writes
+        // (cheap, but keeps the PATCH meaningful).
+        if (
+          draftTrimStart !== contribution.mediaTrimStartSec ||
+          draftTrimEnd !== contribution.mediaTrimEndSec
+        ) {
+          body.mediaTrimStartSec = draftTrimStart
+          body.mediaTrimEndSec = draftTrimEnd
         }
       }
 
@@ -152,6 +169,9 @@ export function SentReview({
         mediaTrimEndSec: data.mediaTrimEndSec ?? null,
         contributorNote: data.contributorNote,
       }))
+      // Zip 2c.5: keep draft trim state in sync with what the server saved
+      setDraftTrimStart(data.mediaTrimStartSec ?? null)
+      setDraftTrimEnd(data.mediaTrimEndSec ?? null)
       setPendingMedia(null)
       setMode('view')
     } catch (err) {
@@ -324,6 +344,30 @@ export function SentReview({
 
           {contribution.type === 'video' && (
             <div>
+              {/* Zip 2c.5: trim is editable independently of the video itself.
+                  Contributors who didn't quite nail the trim in the first
+                  submission can refine it here without re-uploading the
+                  whole clip. Parent owns persistence — the trim values
+                  ride along on the next Save Changes click. */}
+              {contribution.mediaUrl &&
+                contribution.mediaDurationSec &&
+                contribution.mediaDurationSec > 0 && (
+                  <div className="mb-6 border border-[#2c2416]/15 bg-[#f5f1e8]/40 p-4 md:p-5">
+                    <p className="text-[10px] md:text-xs tracking-[0.3em] uppercase text-[#8b6f3a] mb-3">
+                      Adjust trim
+                    </p>
+                    <TrimSlider
+                      durationSec={contribution.mediaDurationSec}
+                      trimStart={draftTrimStart}
+                      trimEnd={draftTrimEnd}
+                      onChange={(s, e) => {
+                        setDraftTrimStart(s)
+                        setDraftTrimEnd(e)
+                      }}
+                    />
+                  </div>
+                )}
+
               <p className="text-[10px] md:text-xs tracking-[0.3em] uppercase text-[#8b6f3a] mb-2">
                 Replace the video
               </p>
@@ -333,6 +377,9 @@ export function SentReview({
               <VideoRecorder
                 messageId={contribution.id}
                 initialVideoUrl={pendingMedia?.url ?? contribution.mediaUrl}
+                initialDurationSec={
+                  pendingMedia?.durationSec ?? contribution.mediaDurationSec
+                }
                 initialTrimStartSec={
                   pendingMedia ? (pendingMedia.trimStartSec ?? null) : contribution.mediaTrimStartSec
                 }
@@ -440,6 +487,8 @@ export function SentReview({
               onClick={() => {
                 setDraftContent(contribution.content ?? '')
                 setDraftNote(contribution.contributorNote ?? '')
+                setDraftTrimStart(contribution.mediaTrimStartSec)
+                setDraftTrimEnd(contribution.mediaTrimEndSec)
                 setPendingMedia(null)
                 setMode('view')
                 setErrorMsg(null)

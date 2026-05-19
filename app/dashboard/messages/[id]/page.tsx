@@ -346,6 +346,11 @@ function typeArticle(type: 'letter' | 'video' | 'photo' | 'story'): string {
  * Tiny inline wrapper that pairs the trim hook with a <video> element.
  * The hook reads the trim values and enforces them via loadedmetadata
  * + timeupdate listeners. Blob is full-length; experience is trimmed.
+ *
+ * Zip 2c.5 hotfix 4 (C): adds a Restart button below the player when
+ * trim is active. The browser's pause-at-end behavior can look like the
+ * video froze — Restart gives users an obvious way to replay from the
+ * trim start without having to scrub.
  */
 function TrimmedVideo({
   src,
@@ -357,13 +362,55 @@ function TrimmedVideo({
   trimEndSec: number | null
 }) {
   const ref = useTrimmedVideo(trimStartSec, trimEndSec)
+  const hasTrim = trimStartSec !== null || trimEndSec !== null
+
+  const handleRestart = () => {
+    const el = ref.current
+    if (!el) return
+    try {
+      el.currentTime = trimStartSec ?? 0
+      el.play().catch(() => {
+        /* Autoplay blocked or paused state — leave the user to hit play */
+      })
+    } catch {
+      /* ignore */
+    }
+  }
+
   return (
-    <video
-      ref={ref}
-      src={src}
-      controls
-      playsInline
-      className="w-full bg-black"
-    />
+    <div>
+      <video
+        ref={ref}
+        src={src}
+        controls
+        playsInline
+        className="w-full bg-black"
+      />
+      {hasTrim && (
+        <div className="flex justify-between items-center mt-2 px-1">
+          <button
+            onClick={handleRestart}
+            className="text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a] hover:text-[#2c2416] transition"
+          >
+            ↺ Restart
+          </button>
+          <p className="text-[10px] italic text-[#5c4d2e]/60">
+            Plays {formatTrimRange(trimStartSec, trimEndSec)}
+          </p>
+        </div>
+      )}
+    </div>
   )
+}
+
+function formatTrimRange(start: number | null, end: number | null): string {
+  const fmt = (s: number) => {
+    const m = Math.floor(s / 60)
+    const r = Math.floor(s % 60)
+    return `${m}:${r.toString().padStart(2, '0')}`
+  }
+  if (start !== null && end !== null) return `from ${fmt(start)} to ${fmt(end)}`
+  if (start !== null) return `from ${fmt(start)}`
+  if (end !== null) return `up to ${fmt(end)}`
+  return ''
 }

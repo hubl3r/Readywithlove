@@ -7,24 +7,24 @@ import { motion, AnimatePresence } from 'motion/react'
 import { UserButton } from '@clerk/nextjs'
 
 interface NavItem {
-  num: string         // roman numeral
+  num: string
   label: string
   href: string
-  available: boolean  // false → grayed out, "coming soon"
+  available: boolean
+  /**
+   * Key for indicating activity. When set, the corresponding nav item shows
+   * a small red dot next to its label if `unread[key]` is true.
+   */
+  unreadKey?: 'contributions'
 }
 
 // Order matches the chapter sequence in the dashboard cards. Update the
 // `available` flag as each zip ships.
-//
-// Note: "Contributions" deep-links into the Messages page on the "From others"
-// tab. Same URL family as iii. Messages — both highlight on /dashboard/messages.
-// That's intentional: contributions and outgoing messages share a home (the
-// shoebox), the nav item is just a shortcut.
 const ITEMS: NavItem[] = [
   { num: 'i.',    label: 'Dashboard',     href: '/dashboard',                          available: true  },
   { num: 'ii.',   label: 'Timeline',      href: '/dashboard/timeline',                 available: true  },
   { num: 'iii.',  label: 'Messages',      href: '/dashboard/messages',                 available: true  },
-  { num: 'iv.',   label: 'Contributions', href: '/dashboard/messages?tab=received',    available: true  },
+  { num: 'iv.',   label: 'Contributions', href: '/dashboard/contributions',             available: true,  unreadKey: 'contributions' },
   { num: 'v.',    label: 'Contacts',      href: '/dashboard/contacts',                 available: false },
   { num: 'vi.',   label: 'Arrangements',  href: '/dashboard/arrangements',             available: false },
   { num: 'vii.',  label: 'Vault',         href: '/dashboard/vault',                    available: false },
@@ -34,7 +34,22 @@ const ITEMS: NavItem[] = [
 export function AppNav() {
   const [open, setOpen] = useState(false)
 
-  // Close on Escape, and lock body scroll while open
+  // Activity indicators. Fetched once per mount from /api/contributions/stats.
+  // Cheap COUNT query, runs in the background while the page renders.
+  const [unread, setUnread] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    fetch('/api/contributions/stats')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) {
+          setUnread({ contributions: (data.unviewedCount ?? 0) > 0 })
+        }
+      })
+      .catch(() => {/* nav badge is non-critical */})
+  }, [])
+
+  // Close on Escape, lock body scroll while open
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -51,16 +66,20 @@ export function AppNav() {
   return (
     <>
       <nav className="relative z-30 flex justify-between items-center px-5 md:px-12 py-5 md:py-8 max-w-[1400px] mx-auto gap-3 border-b border-[#2c2416]/10">
-        {/* Left: hamburger + brand */}
         <div className="flex items-center gap-4 md:gap-6 min-w-0">
           <button
             onClick={() => setOpen(true)}
             aria-label="Open menu"
-            className="group w-10 h-10 flex flex-col justify-center items-center gap-1.5 -ml-1 hover:opacity-70 transition"
+            className="group w-10 h-10 flex flex-col justify-center items-center gap-1.5 -ml-1 hover:opacity-70 transition relative"
           >
             <span className="block w-6 h-px bg-[#2c2416] transition group-hover:w-7" />
             <span className="block w-6 h-px bg-[#2c2416] transition" />
             <span className="block w-6 h-px bg-[#2c2416] transition group-hover:w-4" />
+            {/* Mirror the same activity indicator on the hamburger itself
+                so users see something is new even before they open the menu. */}
+            {Object.values(unread).some(Boolean) && (
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[#c0392b]" />
+            )}
           </button>
 
           <Link
@@ -75,7 +94,6 @@ export function AppNav() {
           </Link>
         </div>
 
-        {/* Right: user + settings shortcut */}
         <div className="flex items-center gap-3 md:gap-5">
           <UserButton />
           <Link
@@ -92,7 +110,6 @@ export function AppNav() {
       <AnimatePresence>
         {open && (
           <>
-            {/* Backdrop */}
             <motion.div
               key="backdrop"
               initial={{ opacity: 0 }}
@@ -104,7 +121,6 @@ export function AppNav() {
               aria-hidden="true"
             />
 
-            {/* Panel */}
             <motion.aside
               key="panel"
               initial={{ x: '-100%' }}
@@ -116,7 +132,6 @@ export function AppNav() {
               aria-modal="true"
               aria-label="Main navigation"
             >
-              {/* Panel header */}
               <div className="flex items-center justify-between px-6 md:px-8 py-5 md:py-7 border-b border-[#2c2416]/10">
                 <p className="text-[10px] md:text-xs tracking-[0.3em] uppercase text-[#8b6f3a]">
                   Table of Contents
@@ -130,44 +145,51 @@ export function AppNav() {
                 </button>
               </div>
 
-              {/* Chapter list */}
               <ul className="flex-1 overflow-y-auto px-6 md:px-8 py-6 md:py-8 space-y-1">
-                {ITEMS.map((item) => (
-                  <li key={item.href}>
-                    {item.available ? (
-                      <Link
-                        href={item.href}
-                        onClick={() => setOpen(false)}
-                        className="group flex items-baseline gap-4 py-3 hover:bg-[#8b6f3a]/5 -mx-2 px-2 transition"
-                      >
-                        <span className="font-serif italic text-sm md:text-base text-[#8b6f3a] w-8 shrink-0">
-                          {item.num}
-                        </span>
-                        <span className="font-serif text-xl md:text-2xl text-[#2c2416] group-hover:text-[#8b6f3a] transition">
-                          {item.label}
-                        </span>
-                      </Link>
-                    ) : (
-                      <div
-                        className="flex items-baseline gap-4 py-3 -mx-2 px-2 cursor-not-allowed"
-                        title="Coming soon"
-                      >
-                        <span className="font-serif italic text-sm md:text-base text-[#8b6f3a]/40 w-8 shrink-0">
-                          {item.num}
-                        </span>
-                        <span className="font-serif text-xl md:text-2xl text-[#2c2416]/40">
-                          {item.label}
-                        </span>
-                        <span className="ml-auto text-[9px] md:text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a]/60 self-center">
-                          soon
-                        </span>
-                      </div>
-                    )}
-                  </li>
-                ))}
+                {ITEMS.map((item) => {
+                  const hasUnread = item.unreadKey ? !!unread[item.unreadKey] : false
+                  return (
+                    <li key={item.href}>
+                      {item.available ? (
+                        <Link
+                          href={item.href}
+                          onClick={() => setOpen(false)}
+                          className="group flex items-baseline gap-4 py-3 hover:bg-[#8b6f3a]/5 -mx-2 px-2 transition"
+                        >
+                          <span className="font-serif italic text-sm md:text-base text-[#8b6f3a] w-8 shrink-0">
+                            {item.num}
+                          </span>
+                          <span className="font-serif text-xl md:text-2xl text-[#2c2416] group-hover:text-[#8b6f3a] transition flex items-center gap-2">
+                            {item.label}
+                            {hasUnread && (
+                              <span
+                                className="inline-block w-2 h-2 rounded-full bg-[#c0392b]"
+                                aria-label="New activity"
+                              />
+                            )}
+                          </span>
+                        </Link>
+                      ) : (
+                        <div
+                          className="flex items-baseline gap-4 py-3 -mx-2 px-2 cursor-not-allowed"
+                          title="Coming soon"
+                        >
+                          <span className="font-serif italic text-sm md:text-base text-[#8b6f3a]/40 w-8 shrink-0">
+                            {item.num}
+                          </span>
+                          <span className="font-serif text-xl md:text-2xl text-[#2c2416]/40">
+                            {item.label}
+                          </span>
+                          <span className="ml-auto text-[9px] md:text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a]/60 self-center">
+                            soon
+                          </span>
+                        </div>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
 
-              {/* Settings at the bottom with gear */}
               <div className="border-t border-[#2c2416]/10 px-6 md:px-8 py-5 md:py-6">
                 <Link
                   href="/dashboard/settings"

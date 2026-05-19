@@ -3,21 +3,20 @@ import { auth } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { ensureUser } from '@/lib/userBootstrap'
+import { deleteBlob } from '@/lib/blob'
 
 /**
  * GET — fetch one contribution. Side effect: marks viewedByUser=true so the
  *       unread dot in the nav clears once the user actually opens it.
- *       (We could move this to a separate "mark viewed" call but the GET is
- *       always immediately tied to viewing, so this is fine.)
  *
  * PATCH — body can include:
  *   - archive: true | false       → set/clear archivedAt
  *   - importedToTimelineItemId: string | null
- *     (normally set by the Timeline POST when fromContributionId is passed;
- *     exposed here for manual override / future-proofing)
  *
- * No DELETE. Per product decision (Zip 2c.2): contributions are gifts;
- * once received, they can be archived but not destroyed.
+ * DELETE — Zip 2c.4: hard-delete the contribution. Removes the row, deletes
+ *   the blob if present, decrements the invite useCount. Unlike the
+ *   contributor's 24h edit window, the OWNER can delete at any time —
+ *   it's their shoebox.
  */
 
 export async function GET(
@@ -50,7 +49,7 @@ export async function GET(
       importedToTimelineItemId: true,
       createdAt: true,
       invite: {
-        select: { id: true, contributorEmail: true, message: true },
+        select: { id: true, contributorEmail: true, message: true, revokedAt: true },
       },
     },
   })
@@ -59,14 +58,22 @@ export async function GET(
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  // Mark viewed on first GET. Cheap enough to do every time (no-op when
-  // already true thanks to Prisma's diff-based update), but we skip the
-  // write when already true to avoid burning a connection.
   if (!contribution.viewedByUser) {
     await prisma.contribution.update({
       where: { id },
       data: { viewedByUser: true },
     })
+  }
+
+  // Zip 2c.4: if this contribution was imported to a timeline item,
+  // fetch that item's date so the UI can show "✓ Added to 1975".
+  let importedToTimelineDate: string | null = null
+  if (contribution.importedToTimelineItemId) {
+    const item = await prisma.timelineItem.findUnique({
+      where: { id: contribution.importedToTimelineItemId },
+      select: { date: true },
+    })
+    if (item) importedToTimelineDate = item.date.toISOString()
   }
 
   return NextResponse.json({
@@ -76,14 +83,17 @@ export async function GET(
     contributorEmail: contribution.invite.contributorEmail,
     contributorNote: contribution.contributorNote,
     inviteMessage: contribution.invite.message,
+    inviteId: contribution.invite.id,
+    inviteRevokedAt: contribution.invite.revokedAt?.toISOString() ?? null,
     content: contribution.content,
     mediaUrl: contribution.mediaUrl,
     mediaDurationSec: contribution.mediaDurationSec,
     mediaTrimStartSec: contribution.mediaTrimStartSec,
     mediaTrimEndSec: contribution.mediaTrimEndSec,
-    viewedByUser: true, // we just set it
+    viewedByUser: true,
     archivedAt: contribution.archivedAt?.toISOString() ?? null,
     importedToTimelineItemId: contribution.importedToTimelineItemId,
+    importedToTimelineDate,
     createdAt: contribution.createdAt.toISOString(),
   })
 }
@@ -149,4 +159,48 @@ export async function PATCH(
     archivedAt: updated.archivedAt?.toISOString() ?? null,
     importedToTimelineItemId: updated.importedToTimelineItemId,
   })
+}
+
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { userId } = await auth()
+  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  await ensureUser(userId)
+
+  const { id } = await params
+
+  const existing = await prisma.contribution.findUnique({
+    where: { id },
+    select: { id: true, userId: true, mediaUrl: true, inviteId: true },
+  })
+  if (!existing || existing.userId !== userId) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
+  // Delete row first so a blob-delete failure doesn't leave a dangling
+  // record pointing at a deleted blob. The blob becomes an orphan on
+  // failure, which is recoverable via the Vercel dashboard — worse
+  // outcome would be a DB row pointing at a 404.
+  await prisma.contribution.delete({ where: { id } })
+
+  if (existing.mediaUrl) {
+    try {
+      await deleteBlob(existing.mediaUrl)
+    } catch (err) {
+      console.error('[contribution DELETE] blob delete failed:', err)
+      // Don't fail the request — the contribution is gone from the user's
+      // perspective. The orphaned blob can be cleaned up later.
+    }
+  }
+
+  // Decrement the invite's useCount so the displayed count stays accurate
+  await prisma.messageInvite.update({
+    where: { id: existing.inviteId },
+    data: { useCount: { decrement: 1 } },
+  })
+
+  return NextResponse.json({ ok: true })
 }

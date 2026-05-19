@@ -2,12 +2,14 @@
 'use client'
 
 import { motion, AnimatePresence } from 'motion/react'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { PhotoUploader } from '@/components/PhotoUploader'
 import { PhotoCarousel, type PhotoData } from '@/components/PhotoCarousel'
 import { Flipbook, type FlipbookPage } from '@/components/Flipbook'
 import { AppNav } from '@/components/AppNav'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { FlexibleDatePicker } from '@/components/FlexibleDatePicker'
 
 interface TimelineItem {
   id: string
@@ -29,19 +31,55 @@ interface QuotaInfo {
 
 const FLIPBOOK_THRESHOLD = 10
 
+// Suspense wrapper — required by Next.js when using useSearchParams in a
+// client component. The actual UI lives in TimelineInner below.
 export default function Timeline() {
+  return (
+    <Suspense fallback={<TimelineFallback />}>
+      <TimelineInner />
+    </Suspense>
+  )
+}
+
+function TimelineFallback() {
+  return (
+    <div className="min-h-screen bg-[#f5f1e8] text-[#2c2416]">
+      <AppNav />
+      <main className="relative z-10 max-w-[1100px] mx-auto px-5 md:px-12 py-10 md:py-16">
+        <p className="font-serif italic text-[#5c4d2e]">Loading your story…</p>
+      </main>
+    </div>
+  )
+}
+
+function TimelineInner() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
   const [items, setItems] = useState<TimelineItem[]>([])
   const [photosByMilestone, setPhotosByMilestone] = useState<Record<string, PhotoData[]>>({})
   const [quota, setQuota] = useState<QuotaInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [formData, setFormData] = useState({ date: '', title: '', story: '' })
+  const [formData, setFormData] = useState({ date: '', title: '', story: '', mediaUrl: '' })
   const [saving, setSaving] = useState(false)
   const [expandedItem, setExpandedItem] = useState<string | null>(null)
   const [showFlipbook, setShowFlipbook] = useState(false)
   const [pageTurnStyle, setPageTurnStyle] = useState<'fade' | 'curl'>('fade')
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+
+  // Zip 2c.2 — When the user clicks "Add to my timeline" on a contribution
+  // page, they're redirected here with ?prefill=<contributionId>. We fetch
+  // the contribution, populate the form fields, and stash the id so the
+  // POST can also mark the contribution imported.
+  const [prefillContributionId, setPrefillContributionId] = useState<string | null>(null)
+  const [prefillSource, setPrefillSource] = useState<{
+    contributorName: string
+    type: string
+  } | null>(null)
+  // Zip 2c.4: surface prefill failures so users don't see a blank page
+  const [prefillError, setPrefillError] = useState<string | null>(null)
 
   const fetchAll = useCallback(async () => {
     try {
@@ -80,6 +118,70 @@ export default function Timeline() {
     fetchAll()
   }, [fetchAll])
 
+  // Handle ?prefill=<contributionId>
+  useEffect(() => {
+    const prefillId = searchParams.get('prefill')
+    if (!prefillId) return
+    // Already loaded this one — don't re-trigger
+    if (prefillContributionId === prefillId) return
+
+    fetch(`/api/contributions/${prefillId}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          // Bubble the error message up so we can surface it
+          const errJson = await r.json().catch(() => ({}))
+          throw new Error(errJson.error || `Failed to load contribution (${r.status})`)
+        }
+        return r.json()
+      })
+      .then((data) => {
+        if (!data) return
+
+        // Sensible defaults for the form fields:
+        //   - date  → today (contributions don't carry a date; user picks)
+        //   - title → generated from contributor name + type
+        //   - story → contribution content (letter/story), or contributor note
+        //             for video/photo (since there's no inline text)
+        //   - mediaUrl → for photo, reuse the blob URL directly
+        const today = new Date().toISOString().split('T')[0]
+        const titleByType =
+          data.type === 'letter' ? `Letter from ${data.contributorName}` :
+          data.type === 'video'  ? `Video from ${data.contributorName}`  :
+          data.type === 'photo'  ? `Photo from ${data.contributorName}`  :
+                                   `A memory from ${data.contributorName}`
+        const story =
+          data.type === 'letter' || data.type === 'story'
+            ? (data.content ?? '')
+            : (data.contributorNote ?? '')
+        const mediaUrl = data.type === 'photo' ? (data.mediaUrl ?? '') : ''
+
+        setFormData({
+          date: today,
+          title: titleByType,
+          story,
+          mediaUrl,
+        })
+        setPrefillContributionId(prefillId)
+        setPrefillSource({
+          contributorName: data.contributorName,
+          type: data.type,
+        })
+        setEditingId(null)
+        setShowForm(true)
+        // Zip 2c.4: clear the prefill-error state on a successful load
+        setPrefillError(null)
+      })
+      .catch((err) => {
+        // Zip 2c.4: surface the error to the user instead of silently
+        // landing on a blank timeline. Previously this caught and swallowed,
+        // which made it look like the link just didn't work.
+        console.error('[timeline prefill] fetch failed:', err)
+        setPrefillError(
+          'We couldn\u2019t load that contribution. Please go back and try again.'
+        )
+      })
+  }, [searchParams, prefillContributionId])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.date || !formData.title) return
@@ -89,17 +191,32 @@ export default function Timeline() {
       const url = editingId ? `/api/timeline/${editingId}` : '/api/timeline'
       const method = editingId ? 'PATCH' : 'POST'
 
+      // Only include fromContributionId on POST (new item) — editing an
+      // existing milestone via prefill makes no sense.
+      const body =
+        !editingId && prefillContributionId
+          ? { ...formData, fromContributionId: prefillContributionId }
+          : formData
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(body),
       })
 
       if (res.ok) {
         await fetchAll()
         setShowForm(false)
         setEditingId(null)
-        setFormData({ date: '', title: '', story: '' })
+        setFormData({ date: '', title: '', story: '', mediaUrl: '' })
+
+        // Clear prefill state + clean up the URL so a refresh doesn't
+        // re-open the form
+        if (prefillContributionId) {
+          setPrefillContributionId(null)
+          setPrefillSource(null)
+          router.replace('/dashboard/timeline')
+        }
       }
     } catch (err) {
       console.error('Failed to save:', err)
@@ -114,8 +231,20 @@ export default function Timeline() {
       date: item.date.split('T')[0],
       title: item.title,
       story: item.story || '',
+      mediaUrl: item.mediaUrl || '',
     })
     setShowForm(true)
+  }
+
+  const handleCloseForm = () => {
+    setShowForm(false)
+    // If user closes form on a prefill flow, also clean up the URL so
+    // they don't get stuck in a "re-open every refresh" loop.
+    if (prefillContributionId) {
+      setPrefillContributionId(null)
+      setPrefillSource(null)
+      router.replace('/dashboard/timeline')
+    }
   }
 
   const handleDelete = (id: string) => {
@@ -179,7 +308,6 @@ export default function Timeline() {
   const totalPhotos = quota?.used ?? 0
   const flipbookUnlocked = totalPhotos >= FLIPBOOK_THRESHOLD
 
-  // Build flipbook pages — chronological cover then one spread per milestone with photos
   const buildFlipbookPages = (): FlipbookPage[] => {
     const pages: FlipbookPage[] = [
       {
@@ -190,7 +318,7 @@ export default function Timeline() {
     ]
     items.forEach((item) => {
       const photos = photosByMilestone[item.id] || []
-      if (photos.length === 0) return // skip milestones without photos
+      if (photos.length === 0) return
       pages.push({
         kind: 'milestone',
         title: item.title,
@@ -204,7 +332,6 @@ export default function Timeline() {
 
   return (
     <div className="min-h-screen bg-[#f5f1e8] text-[#2c2416] relative overflow-x-hidden">
-      {/* Animated background */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
         <motion.div
           animate={{ x: [0, 200, 0], y: [0, 150, 0], scale: [1, 1.2, 1] }}
@@ -226,7 +353,6 @@ export default function Timeline() {
         />
       </div>
 
-      {/* Grain overlay */}
       <div
         className="fixed inset-0 pointer-events-none opacity-[0.04] z-50"
         style={{
@@ -237,7 +363,6 @@ export default function Timeline() {
       <AppNav />
 
       <main className="relative z-10 max-w-[1100px] mx-auto px-5 md:px-12 py-10 md:py-16">
-        {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -257,12 +382,29 @@ export default function Timeline() {
             written. Photos, stories, and amusing anecdotes only you can tell.
           </p>
 
+          {prefillError && (
+            <div className="mt-6 border-l-2 border-[#c0392b] bg-[#c0392b]/5 px-4 py-3 max-w-2xl">
+              <p className="font-serif italic text-sm md:text-base text-[#c0392b]">
+                {prefillError}
+              </p>
+              <button
+                onClick={() => {
+                  setPrefillError(null)
+                  router.replace('/dashboard/timeline')
+                }}
+                className="mt-2 text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a] hover:text-[#2c2416] transition"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           <div className="mt-8 md:mt-10 flex flex-wrap gap-3 md:gap-4 items-center">
             <button
               onClick={() => {
                 setShowForm(true)
                 setEditingId(null)
-                setFormData({ date: '', title: '', story: '' })
+                setFormData({ date: '', title: '', story: '', mediaUrl: '' })
               }}
               className="group inline-flex items-center gap-3 bg-[#2c2416] text-[#f5f1e8] px-6 md:px-8 py-3 md:py-4 hover:bg-[#8b6f3a] transition cursor-pointer"
             >
@@ -302,7 +444,6 @@ export default function Timeline() {
           </div>
         </motion.div>
 
-        {/* Timeline */}
         {loading ? (
           <p className="text-center text-[#5c4d2e] italic py-20">Loading your story...</p>
         ) : items.length === 0 ? (
@@ -316,18 +457,16 @@ export default function Timeline() {
               Your story begins here.
             </p>
             <p className="text-sm md:text-base text-[#8b6f3a] mb-8 max-w-md mx-auto px-5">
-              Start with the day you were born. Or any moment that mattered. There's no wrong
+              Start with the day you were born. Or any moment that mattered. There&apos;s no wrong
               place to begin.
             </p>
           </motion.div>
         ) : (
           <div className="relative">
-            {/* Vertical timeline line */}
             <div className="absolute left-4 md:left-1/2 top-0 bottom-0 w-px bg-[#2c2416]/20"></div>
 
             {years.map((year) => (
               <div key={year} className="mb-8 md:mb-12">
-                {/* Year marker */}
                 <motion.div
                   initial={{ opacity: 0, scale: 0.9 }}
                   whileInView={{ opacity: 1, scale: 1 }}
@@ -341,7 +480,6 @@ export default function Timeline() {
                   </div>
                 </motion.div>
 
-                {/* Items in this year */}
                 {groupedByYear[year].map((item, itemIdx) => {
                   const photos = photosByMilestone[item.id] || []
                   const isExpanded = expandedItem === item.id
@@ -368,13 +506,22 @@ export default function Timeline() {
                             {formatDate(item.date)}
                           </p>
                           <h3 className="font-serif text-xl md:text-2xl mb-2">{item.title}</h3>
+                          {item.mediaUrl && (
+                            <div className="mb-3 -mx-1 max-h-64 overflow-hidden bg-black/5">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={item.mediaUrl}
+                                alt={item.title}
+                                className="block w-full max-h-64 object-cover"
+                              />
+                            </div>
+                          )}
                           {item.story && (
                             <p className="text-sm md:text-base text-[#5c4d2e] leading-relaxed font-light whitespace-pre-wrap">
                               {item.story}
                             </p>
                           )}
 
-                          {/* Photo count + expand */}
                           {photos.length > 0 && !isExpanded && (
                             <button
                               onClick={() => setExpandedItem(item.id)}
@@ -386,7 +533,6 @@ export default function Timeline() {
                             </button>
                           )}
 
-                          {/* Expanded carousel */}
                           <AnimatePresence>
                             {isExpanded && (
                               <motion.div
@@ -429,7 +575,6 @@ export default function Timeline() {
                             )}
                           </AnimatePresence>
 
-                          {/* Add photos when none yet */}
                           {photos.length === 0 && !isExpanded && (
                             <button
                               onClick={() => setExpandedItem(item.id)}
@@ -478,7 +623,7 @@ export default function Timeline() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                onClick={() => setShowForm(false)}
+                onClick={handleCloseForm}
                 className="fixed inset-0 bg-[#2c2416]/40 backdrop-blur-sm z-50"
               />
               <motion.div
@@ -490,23 +635,40 @@ export default function Timeline() {
               >
                 <form onSubmit={handleSubmit} className="p-6 md:p-10">
                   <p className="text-[10px] md:text-xs tracking-[0.3em] uppercase text-[#8b6f3a] mb-2">
-                    {editingId ? 'Edit milestone' : 'Add milestone'}
+                    {editingId
+                      ? 'Edit milestone'
+                      : prefillSource
+                        ? 'Add to your timeline'
+                        : 'Add milestone'}
                   </p>
-                  <h2 className="font-serif text-2xl md:text-3xl mb-6 md:mb-8">
-                    {editingId ? 'Refine this moment.' : 'A moment that mattered.'}
+                  <h2 className="font-serif text-2xl md:text-3xl mb-3">
+                    {editingId
+                      ? 'Refine this moment.'
+                      : prefillSource
+                        ? <>From <span className="italic">{prefillSource.contributorName}</span></>
+                        : 'A moment that mattered.'}
                   </h2>
+
+                  {/* Prefill banner */}
+                  {prefillSource && !editingId && (
+                    <p className="font-serif italic text-sm md:text-base text-[#5c4d2e] mb-6 md:mb-8">
+                      Pick a date that fits this memory and adjust the title if you’d
+                      like. The contribution stays in your shoebox either way.
+                    </p>
+                  )}
 
                   <div className="mb-5">
                     <label className="block text-[10px] md:text-xs tracking-[0.2em] uppercase text-[#5c4d2e] mb-2">
                       Date
                     </label>
-                    <input
-                      type="date"
+                    <FlexibleDatePicker
                       value={formData.date}
-                      onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                      onChange={(next) => setFormData({ ...formData, date: next })}
                       required
-                      className="w-full bg-transparent border-b border-[#2c2416]/30 focus:border-[#8b6f3a] outline-none py-2 text-base md:text-lg font-serif"
                     />
+                    <p className="text-[10px] italic text-[#5c4d2e]/60 mt-1">
+                      Year is required. Month and day are optional — pick what you remember.
+                    </p>
                   </div>
 
                   <div className="mb-5">
@@ -537,10 +699,27 @@ export default function Timeline() {
                     />
                   </div>
 
+                  {/* Photo preview if prefilled from a photo contribution */}
+                  {formData.mediaUrl && (
+                    <div className="mb-6 md:mb-8">
+                      <p className="block text-[10px] md:text-xs tracking-[0.2em] uppercase text-[#5c4d2e] mb-2">
+                        Photo
+                      </p>
+                      <div className="bg-black border border-[#2c2416]/15">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={formData.mediaUrl}
+                          alt="From contribution"
+                          className="block w-full max-h-60 object-contain mx-auto"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex gap-3 justify-end">
                     <button
                       type="button"
-                      onClick={() => setShowForm(false)}
+                      onClick={handleCloseForm}
                       className="px-4 md:px-6 py-2 md:py-3 text-xs md:text-sm tracking-[0.2em] uppercase hover:text-[#8b6f3a] transition"
                     >
                       Cancel
@@ -559,7 +738,6 @@ export default function Timeline() {
           )}
         </AnimatePresence>
 
-        {/* Flipbook */}
         <AnimatePresence>
           {showFlipbook && flipbookUnlocked && (
             <Flipbook

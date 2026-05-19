@@ -4,6 +4,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { upload } from '@vercel/blob/client'
+import { TrimSlider } from './TrimSlider'
+import { useTrimmedVideoOnRef } from '@/lib/useTrimmedVideo'
 
 type Stage = 'idle' | 'requesting' | 'live' | 'recording' | 'review' | 'uploading' | 'done' | 'error'
 type Source = 'record' | 'file'
@@ -29,6 +31,7 @@ interface VideoRecorderProps {
     trimEndSec: number | null
   }) => void
   initialVideoUrl?: string | null
+  initialDurationSec?: number | null
   initialTrimStartSec?: number | null
   initialTrimEndSec?: number | null
   maxSeconds?: number
@@ -116,6 +119,7 @@ export function VideoRecorder({
   messageId,
   onUploaded,
   initialVideoUrl,
+  initialDurationSec,
   initialTrimStartSec,
   initialTrimEndSec,
   maxSeconds = DEFAULT_MAX_SECONDS,
@@ -128,15 +132,26 @@ export function VideoRecorder({
   const [stage, setStage] = useState<Stage>(initialVideoUrl ? 'done' : 'idle')
   const [source, setSource] = useState<Source>('record')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [seconds, setSeconds] = useState(0)
+  const [seconds, setSeconds] = useState(initialDurationSec ?? 0)
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(initialVideoUrl ?? null)
   const [aspectRatio, setAspectRatio] = useState<number>(16 / 9)
   // Trim state. trimStart/trimEnd in seconds. Null = no trim from that side.
-  // The clip's full duration is `seconds` (for fresh records) or measured
-  // via metadata for uploaded files / existing media.
+  // These are the "committed" values — what's saved on the server.
   const [trimStart, setTrimStart] = useState<number | null>(initialTrimStartSec ?? null)
   const [trimEnd, setTrimEnd] = useState<number | null>(initialTrimEndSec ?? null)
+
+  // Zip 2c.5 hotfix 3: explicit trim panel. The panel is hidden by default
+  // in the done stage; clicking "Trim" opens it and exposes Save/Cancel
+  // controls. Draft state holds the in-progress edits separately from the
+  // committed trim values, so Cancel can revert and Save can persist
+  // intentionally (not 600ms after each drag).
+  const [trimPanelOpen, setTrimPanelOpen] = useState(false)
+  const [draftTrimStart, setDraftTrimStart] = useState<number | null>(initialTrimStartSec ?? null)
+  const [draftTrimEnd, setDraftTrimEnd] = useState<number | null>(initialTrimEndSec ?? null)
+  const [trimSaving, setTrimSaving] = useState(false)
+  const [trimError, setTrimError] = useState<string | null>(null)
+  const hasUnsavedTrim = trimPanelOpen && (draftTrimStart !== trimStart || draftTrimEnd !== trimEnd)
 
   // Default endpoints (back-compat with MessageEditor)
   const effectiveUploadUrl =
@@ -154,8 +169,22 @@ export function VideoRecorder({
     if (stage === 'recording' || stage === 'review' || stage === 'uploading') return
     setPreviewUrl(initialVideoUrl)
     setStage('done')
+    // Zip 2c.5: ensure we know the duration for the TrimSlider to render.
+    // If parent passed initialDurationSec, use it; otherwise measure.
+    if (initialDurationSec && initialDurationSec > 0) {
+      setSeconds(initialDurationSec)
+    } else {
+      measureVideo(initialVideoUrl)
+        .then((m) => {
+          if (m.duration > 0) setSeconds(Math.round(m.duration))
+          setAspectRatio(m.aspectRatio)
+        })
+        .catch(() => {
+          /* ignore — trim slider just won't render without a duration */
+        })
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialVideoUrl])
+  }, [initialVideoUrl, initialDurationSec])
 
   const liveVideoRef = useRef<HTMLVideoElement | null>(null)
   const reviewVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -164,6 +193,16 @@ export function VideoRecorder({
   const chunksRef = useRef<Blob[]>([])
   const tickRef = useRef<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Zip 2c.5 hotfix 2/3: the recorder's preview respects trim bounds so the
+  // user can see what they're trimming to. When the trim panel is open we
+  // preview the DRAFT values (so dragging is visible); when closed, the
+  // committed values (what's actually saved).
+  useTrimmedVideoOnRef(
+    reviewVideoRef,
+    trimPanelOpen ? draftTrimStart : trimStart,
+    trimPanelOpen ? draftTrimEnd : trimEnd
+  )
 
   const stopCamera = useCallback(() => {
     if (streamRef.current) {
@@ -348,6 +387,74 @@ export function VideoRecorder({
       setStage('idle')
     }
   }
+
+  // ────────────────────────────────────────────────────────────
+  // Trim panel handlers (Zip 2c.5 hotfix 3)
+  // ────────────────────────────────────────────────────────────
+
+  // Open the trim panel: copy committed values into draft state so the
+  // slider starts at the current saved position.
+  const openTrimPanel = () => {
+    setDraftTrimStart(trimStart)
+    setDraftTrimEnd(trimEnd)
+    setTrimError(null)
+    setTrimPanelOpen(true)
+  }
+
+  // Cancel: throw away the draft, revert to committed, collapse panel.
+  const cancelTrim = () => {
+    setDraftTrimStart(trimStart)
+    setDraftTrimEnd(trimEnd)
+    setTrimError(null)
+    setTrimPanelOpen(false)
+  }
+
+  // Save: PATCH the new trim values to the parent row, then commit them
+  // into local state and collapse the panel. If no patchEndpoint is set
+  // (contributor flow), commit locally only — the contributor's parent
+  // page owns the network call.
+  const saveTrim = async () => {
+    setTrimSaving(true)
+    setTrimError(null)
+    try {
+      if (effectivePatch) {
+        const res = await fetch(effectivePatch, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mediaTrimStartSec: draftTrimStart,
+            mediaTrimEndSec: draftTrimEnd,
+          }),
+        })
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}))
+          throw new Error(j.error || `Save failed (${res.status})`)
+        }
+      }
+      setTrimStart(draftTrimStart)
+      setTrimEnd(draftTrimEnd)
+      setTrimPanelOpen(false)
+    } catch (err) {
+      setTrimError((err as Error).message)
+    } finally {
+      setTrimSaving(false)
+    }
+  }
+
+  // Confirm-on-navigate: if the user has unsaved trim changes and tries to
+  // close the tab / reload / navigate away, the browser shows its native
+  // "Leave site?" prompt. We only set up the listener when there are
+  // unsaved changes so the prompt doesn't fire on every page.
+  useEffect(() => {
+    if (!hasUnsavedTrim) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // Older browsers needed returnValue; modern ones honor preventDefault.
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [hasUnsavedTrim])
 
   const acceptAndUpload = async () => {
     if (!recordedBlob) return
@@ -587,33 +694,96 @@ export function VideoRecorder({
           </p>
         )}
         {stage === 'done' && previewUrl && (
-          <>
-            <button
-              onClick={() => {
-                if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
-                setPreviewUrl(null)
-                setRecordedBlob(null)
-                setSeconds(0)
-                startCamera()
-              }}
-              className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
-            >
-              ● Record again
-            </button>
-            <button
-              onClick={() => {
-                if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
-                setPreviewUrl(null)
-                setRecordedBlob(null)
-                setSeconds(0)
-                setStage('idle')
-                setTimeout(() => fileInputRef.current?.click(), 0)
-              }}
-              className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
-            >
-              ↑ Upload another
-            </button>
-          </>
+          <div className="w-full">
+            {/* Zip 2c.5 hotfix 3: trim panel is hidden by default. The
+                user clicks "Trim" to open it, drags handles to preview
+                the cut, then explicitly saves or cancels. No more
+                accidental drag-and-save. */}
+            {seconds > 0 && trimPanelOpen && (
+              <div className="border border-[#8b6f3a]/40 bg-[#f5f1e8]/60 p-4 md:p-5 mb-4">
+                <TrimSlider
+                  durationSec={seconds}
+                  trimStart={draftTrimStart}
+                  trimEnd={draftTrimEnd}
+                  onChange={(s, e) => {
+                    setDraftTrimStart(s)
+                    setDraftTrimEnd(e)
+                  }}
+                />
+                {trimError && (
+                  <p className="mt-3 text-xs italic text-[#c0392b]">{trimError}</p>
+                )}
+                <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-[#2c2416]/15">
+                  <button
+                    onClick={saveTrim}
+                    disabled={trimSaving || !hasUnsavedTrim}
+                    className="bg-[#2c2416] text-[#f5f1e8] px-4 py-2 hover:bg-[#8b6f3a] transition text-xs tracking-[0.2em] uppercase disabled:opacity-40"
+                  >
+                    {trimSaving ? 'Saving…' : '✓ Save trim'}
+                  </button>
+                  <button
+                    onClick={cancelTrim}
+                    disabled={trimSaving}
+                    className="border border-[#2c2416]/30 px-4 py-2 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-3">
+              {seconds > 0 && !trimPanelOpen && (
+                <button
+                  onClick={openTrimPanel}
+                  className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase"
+                >
+                  ✂ Trim
+                  {(trimStart !== null || trimEnd !== null) && (
+                    <span className="ml-2 italic text-[#8b6f3a] normal-case tracking-normal">
+                      ({formatDuration(trimStart ?? 0)} – {formatDuration(trimEnd ?? seconds)})
+                    </span>
+                  )}
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+                  setPreviewUrl(null)
+                  setRecordedBlob(null)
+                  setSeconds(0)
+                  setTrimStart(null)
+                  setTrimEnd(null)
+                  setDraftTrimStart(null)
+                  setDraftTrimEnd(null)
+                  setTrimPanelOpen(false)
+                  startCamera()
+                }}
+                disabled={trimPanelOpen}
+                className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase disabled:opacity-40"
+              >
+                ● Record again
+              </button>
+              <button
+                onClick={() => {
+                  if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+                  setPreviewUrl(null)
+                  setRecordedBlob(null)
+                  setSeconds(0)
+                  setTrimStart(null)
+                  setTrimEnd(null)
+                  setDraftTrimStart(null)
+                  setDraftTrimEnd(null)
+                  setTrimPanelOpen(false)
+                  setStage('idle')
+                  setTimeout(() => fileInputRef.current?.click(), 0)
+                }}
+                disabled={trimPanelOpen}
+                className="px-5 py-3 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase disabled:opacity-40"
+              >
+                ↑ Upload another
+              </button>
+            </div>
+          </div>
         )}
         {stage === 'error' && (
           <button
@@ -690,107 +860,3 @@ function FocusDot() {
     />
   )
 }
-
-interface TrimSliderProps {
-  durationSec: number
-  trimStart: number | null
-  trimEnd: number | null
-  onChange: (start: number | null, end: number | null) => void
-}
-
-/**
- * Two-handle range slider for trimming the front and back of a recorded
- * clip. Doesn't actually re-encode anything — sets `trimStart`/`trimEnd`
- * that get stored alongside the media and enforced on playback.
- *
- * Handles snap to whole seconds. Minimum gap between handles is 1 second
- * so you can't trim away the entire video. Showing "0:03 — 0:42 (39 sec)"
- * keeps users oriented in what the recipient will actually see.
- */
-function TrimSlider({ durationSec, trimStart, trimEnd, onChange }: TrimSliderProps) {
-  // Defaults: 0 and full duration. Internally we always track concrete
-  // numbers; we expose nulls to the parent only when the user hasn't
-  // trimmed from that side (so a "no trim" state can be persisted as nulls).
-  const effectiveStart = trimStart ?? 0
-  const effectiveEnd = trimEnd ?? durationSec
-
-  // Snap to integers
-  const snap = (n: number) => Math.round(Math.max(0, Math.min(durationSec, n)))
-
-  const handleStartChange = (raw: string) => {
-    const n = snap(Number(raw))
-    const next = Math.min(n, effectiveEnd - 1)
-    onChange(next > 0 ? next : null, trimEnd)
-  }
-  const handleEndChange = (raw: string) => {
-    const n = snap(Number(raw))
-    const next = Math.max(n, effectiveStart + 1)
-    onChange(trimStart, next < durationSec ? next : null)
-  }
-
-  const reset = () => onChange(null, null)
-  const isTrimmed = trimStart !== null || trimEnd !== null
-  const visibleSeconds = effectiveEnd - effectiveStart
-
-  return (
-    <div className="border-t border-[#2c2416]/15 pt-4 mt-2">
-      <div className="flex items-baseline justify-between gap-3 mb-2">
-        <p className="text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a]">
-          Trim (optional)
-        </p>
-        <p className="text-[10px] italic text-[#5c4d2e]/70 tabular-nums">
-          {formatDuration(effectiveStart)} – {formatDuration(effectiveEnd)}
-          {' · '}
-          {visibleSeconds}s
-        </p>
-      </div>
-
-      {/* Two range inputs stacked. Browser native — keeps it accessible
-          and works fine for whole-second precision. Custom-styled handles
-          would be nicer visually but cost a lot more code. */}
-      <div className="space-y-2">
-        <label className="block">
-          <span className="text-[9px] tracking-[0.2em] uppercase text-[#5c4d2e]/70 mr-3 inline-block w-12">
-            Start
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(0, durationSec - 1)}
-            step={1}
-            value={effectiveStart}
-            onChange={(e) => handleStartChange(e.target.value)}
-            className="align-middle inline-block w-[calc(100%-4rem)] accent-[#8b6f3a]"
-            aria-label="Trim start"
-          />
-        </label>
-        <label className="block">
-          <span className="text-[9px] tracking-[0.2em] uppercase text-[#5c4d2e]/70 mr-3 inline-block w-12">
-            End
-          </span>
-          <input
-            type="range"
-            min={1}
-            max={durationSec}
-            step={1}
-            value={effectiveEnd}
-            onChange={(e) => handleEndChange(e.target.value)}
-            className="align-middle inline-block w-[calc(100%-4rem)] accent-[#8b6f3a]"
-            aria-label="Trim end"
-          />
-        </label>
-      </div>
-
-      {isTrimmed && (
-        <button
-          type="button"
-          onClick={reset}
-          className="mt-2 text-[10px] tracking-[0.2em] uppercase text-[#8b6f3a] hover:text-[#2c2416] transition"
-        >
-          ↺ Reset (play full video)
-        </button>
-      )}
-    </div>
-  )
-}
-
