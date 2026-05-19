@@ -15,6 +15,7 @@ interface Settings {
   sttEnabled: boolean
   reducedMotion: boolean
   preferredVoiceURI: string | null
+  notifyOnContribution: boolean
 }
 
 const FONT_SCALES: { id: Settings['fontScale']; label: string; size: string }[] = [
@@ -180,6 +181,19 @@ export default function SettingsPage() {
                 preferredVoiceURI={settings.preferredVoiceURI}
                 onChange={(uri) => update({ preferredVoiceURI: uri })}
               />
+            </Section>
+
+            {/* Zip 2c.6 — notification preferences. Email-only for now; the
+                in-app unread dot in AppNav is always on. */}
+            <Section title="Notifications" caption="When to hear from us by email">
+              <div className="space-y-3">
+                <Toggle
+                  label="New contributions"
+                  desc="Email me when someone shares a memory with me. (Multiple submissions from the same contributor within 15 minutes count as one email.)"
+                  on={settings.notifyOnContribution}
+                  onChange={(v) => update({ notifyOnContribution: v })}
+                />
+              </div>
             </Section>
           </div>
         )}

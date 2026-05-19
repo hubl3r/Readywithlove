@@ -76,6 +76,16 @@ model Message {
   approvalToken   String?   @unique
   approvalRemindersSent Int  @default(0)
 
+  // Zip 2c.6: recipient link controls
+  // viewCount  — cumulative recipient page-views since delivery. Incremented
+  //              on every GET /m/[token]. Visible to the sender on the
+  //              dashboard so they can spot unexpected sharing.
+  // linkRevokedAt — when set, the /m/[token] page shows "no longer available"
+  //                 instead of the message. Sender flips this from their
+  //                 dashboard.
+  viewCount       Int       @default(0)
+  linkRevokedAt   DateTime?
+
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   user            User      @relation(fields: [userId], references: [id])
@@ -126,6 +136,13 @@ model Contribution {
   viewedByUser    Boolean   @default(false)
   importedToTimelineItemId String?
   archivedAt      DateTime?
+
+  // Zip 2c.6: timestamp of the new-contribution notification email sent
+  // for this contribution. Used for 15-min per-contributor dedupe — if
+  // a contributor submits 3 items in 5 minutes we only email the owner
+  // once. Null = email never sent (either because owner has notifications
+  // off, or because dedupe suppressed it).
+  notifyEmailedAt DateTime?
 
   createdAt       DateTime  @default(now())
   user            User      @relation(fields: [userId], references: [id])
@@ -213,6 +230,11 @@ model Settings {
   // Zip 2c.3: user's chosen TTS voice. Stored as the Web Speech API's
   // opaque voiceURI string. Null = auto-pick best available.
   preferredVoiceURI String?
+
+  // Zip 2c.6: send the owner an email when a new contribution arrives.
+  // Default on — silent submissions feel uncared-for. Honored at email
+  // send time; per-contributor dedupe still applies even when enabled.
+  notifyOnContribution Boolean @default(true)
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

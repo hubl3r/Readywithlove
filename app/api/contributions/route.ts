@@ -3,6 +3,7 @@ import { auth } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { ensureUser } from '@/lib/userBootstrap'
+import { sendContributionNotificationEmail } from '@/lib/email/sendContributionNotification'
 
 /**
  * Zip 2c.3 hotfix: restores the GET handler that was inadvertently dropped
@@ -55,6 +56,8 @@ export async function GET(request: Request) {
       mediaUrl: true,
       mediaBlobPath: true,
       mediaDurationSec: true,
+      // Zip 2c.3: include trim fields so feed thumbnails / inline previews
+      // can also respect playback bounds when they want to.
       mediaTrimStartSec: true,
       mediaTrimEndSec: true,
       viewedByUser: true,
@@ -66,21 +69,6 @@ export async function GET(request: Request) {
       },
     },
   })
-
-  // Zip 2c.4: batch-fetch the dates of imported timeline items so cards
-  // can show "✓ Added to 1975". One round-trip for all of them; safer
-  // than N+1 from the map.
-  const importedIds = contributions
-    .map((c) => c.importedToTimelineItemId)
-    .filter((id): id is string => !!id)
-  const importedDates = new Map<string, Date>()
-  if (importedIds.length > 0) {
-    const items = await prisma.timelineItem.findMany({
-      where: { id: { in: importedIds } },
-      select: { id: true, date: true },
-    })
-    for (const item of items) importedDates.set(item.id, item.date)
-  }
 
   return NextResponse.json({
     contributions: contributions.map((c) => ({
@@ -97,9 +85,6 @@ export async function GET(request: Request) {
       viewedByUser: c.viewedByUser,
       archivedAt: c.archivedAt?.toISOString() ?? null,
       importedToTimelineItemId: c.importedToTimelineItemId,
-      importedToTimelineDate: c.importedToTimelineItemId
-        ? (importedDates.get(c.importedToTimelineItemId)?.toISOString() ?? null)
-        : null,
       createdAt: c.createdAt.toISOString(),
     })),
   })
@@ -215,6 +200,86 @@ export async function POST(request: Request) {
       },
     }),
   ])
+
+  // Zip 2c.6: send a notification email to the owner. Best-effort —
+  // failures here must NOT bubble back to the contributor (their
+  // submission already succeeded; they shouldn't see a 500 because
+  // the owner's email provider hiccuped).
+  //
+  // Dedupe: only send if no prior contribution FROM THIS SAME INVITE
+  // was emailed within the last 15 minutes. We check by invite, not by
+  // contributor name, because invite is the stable identity here —
+  // contributor name is whatever the inviter typed and could collide.
+  //
+  // Honored toggle: Settings.notifyOnContribution. Default true; if the
+  // user has no Settings row yet, default applies.
+  void (async () => {
+    try {
+      const [settings, owner, recent] = await Promise.all([
+        prisma.settings.findUnique({
+          where: { userId: invite.userId },
+          select: { notifyOnContribution: true },
+        }),
+        prisma.user.findUnique({
+          where: { id: invite.userId },
+          select: { email: true, name: true },
+        }),
+        prisma.contribution.findFirst({
+          where: {
+            inviteId: invite.id,
+            notifyEmailedAt: { not: null },
+            id: { not: contribution.id },
+          },
+          orderBy: { notifyEmailedAt: 'desc' },
+          select: { notifyEmailedAt: true },
+        }),
+      ])
+
+      // Default-on: undefined settings row = treat as enabled
+      const notifyEnabled = settings?.notifyOnContribution ?? true
+      if (!notifyEnabled) return
+      if (!owner?.email) return
+
+      const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000)
+      if (recent?.notifyEmailedAt && recent.notifyEmailedAt > fifteenMinAgo) {
+        // Within dedupe window — don't email, don't mark this one as sent
+        return
+      }
+
+      // Build preview based on type. Letters/stories: first ~30 words.
+      // Videos/photos: literal line (matches messageDelivery convention).
+      const preview = (() => {
+        if (type === 'letter' || type === 'story') {
+          const text = (content ?? '').split(/\s+/).slice(0, 30).join(' ')
+          return text || undefined
+        }
+        return undefined
+      })()
+
+      const base =
+        process.env.NEXT_PUBLIC_APP_URL ?? 'https://www.readywithlove.com'
+
+      await sendContributionNotificationEmail({
+        to: owner.email,
+        recipientName: owner.name ?? 'there',
+        contributorName: invite.contributorName,
+        contributionType: type as 'letter' | 'video' | 'photo' | 'story',
+        contributionPreview: preview,
+        dashboardUrl: `${base}/dashboard/contributions`,
+      })
+
+      // Mark this contribution as the one that triggered the email so
+      // the 15-min window starts now.
+      await prisma.contribution.update({
+        where: { id: contribution.id },
+        data: { notifyEmailedAt: new Date() },
+      })
+    } catch (err) {
+      // Swallow — the contribution itself succeeded; this is just
+      // bookkeeping for the owner. Log for visibility.
+      console.error('contribution notification email failed:', err)
+    }
+  })()
 
   return NextResponse.json({
     ok: true,

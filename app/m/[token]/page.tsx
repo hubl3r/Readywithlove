@@ -1,123 +1,128 @@
 // app/m/[token]/page.tsx
-import { prisma } from '@/lib/prisma'
+//
+// Recipient delivery view. This is what the email link points to. Public
+// route (no Clerk gate). The token in the URL is the credential.
+//
+// Zip 2c.6:
+//  - Looks up message by deliveryToken
+//  - Increments viewCount atomically
+//  - Honors linkRevokedAt — if set, shows "no longer available"
+//  - Renders content with trim respect (video uses useTrimmedVideo)
+//  - Provides "Share link" copy and per-type downloads:
+//      letter / story → .txt
+//      photo          → original file
+//      video          → no download (preserves trim intent + quality)
 
-export const metadata = {
-  title: 'A message for you · ReadyWithLove',
+import { notFound } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { RecipientView } from './RecipientView'
+
+interface PageProps {
+  params: Promise<{ token: string }>
 }
 
-// Server component — fetches the message by token and renders inline.
-// No auth required; the token IS the auth. Tokens are 256 bits so guessing
-// is computationally infeasible.
+export const dynamic = 'force-dynamic' // never cache; view count must be live
 
-export default async function PublicMessagePage({
-  params,
-}: {
-  params: Promise<{ token: string }>
-}) {
+export default async function RecipientMessagePage({ params }: PageProps) {
   const { token } = await params
 
-  const message = await prisma.message.findUnique({
+  // Find message. Includes sender's name (anonymized to first name on the
+  // recipient page; we never show emails or last names — privacy-by-default).
+  const msg = await prisma.message.findUnique({
     where: { deliveryToken: token },
-    include: { user: { select: { name: true } } },
+    include: {
+      user: { select: { name: true } },
+    },
   })
 
-  if (!message || message.state !== 'sent') {
-    return <NotFound />
+  if (!msg) {
+    // No message with this token. We return notFound() rather than a
+    // custom "this link is broken" page because the alternative reveals
+    // that tokens exist at all (a tiny enumeration signal).
+    notFound()
+  }
+  // After notFound() the function never returns. This typed assignment
+  // narrows `msg` to non-null for TypeScript's benefit.
+  const message = msg
+
+  // Revoked links: bail before incrementing view count. Senders who revoke
+  // shouldn't see their viewCount tick up from people hitting the dead link.
+  if (message.linkRevokedAt) {
+    return <RevokedNotice />
   }
 
-  const fromName = message.user.name ?? 'A loved one'
-  const sentDate = message.sentAt
-    ? new Date(message.sentAt).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      })
-    : null
+  // Not yet delivered? The cron sets state=sent and sentAt at delivery time.
+  // If somehow a recipient has the URL early (manual share, leak from the
+  // sender's clipboard), don't reveal content until delivery has actually
+  // happened.
+  if (message.state !== 'sent') {
+    return <NotYetAvailableNotice />
+  }
+
+  // Increment view count. Best-effort: if the update fails (e.g., DB hiccup)
+  // we still serve the message — better to show the recipient their letter
+  // than to hold it hostage to telemetry.
+  try {
+    await prisma.message.update({
+      where: { id: message.id },
+      data: { viewCount: { increment: 1 } },
+    })
+  } catch {
+    /* swallow */
+  }
+
+  // First name only for the sender display. If they put "Adam Hubler" we
+  // show "Adam"; if they put just a single name, that's fine. Defensive
+  // against null because the User.name field is nullable.
+  const fromFirstName = (message.user.name ?? 'A loved one').split(' ')[0]
 
   return (
-    <div className="min-h-screen bg-[#f5f1e8] text-[#2c2416] relative overflow-x-hidden">
-      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
-        <div
-          className="absolute -top-40 -left-40 w-[500px] md:w-[800px] h-[500px] md:h-[800px] rounded-full"
-          style={{
-            background: 'radial-gradient(circle, rgba(139,111,58,0.18) 0%, transparent 70%)',
-            filter: 'blur(80px)',
-          }}
-        />
-      </div>
-      <div
-        className="fixed inset-0 pointer-events-none opacity-[0.04] z-50"
-        style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
-        }}
-      />
+    <RecipientView
+      type={message.type}
+      subject={message.subject}
+      content={message.content}
+      mediaUrl={message.mediaUrl}
+      mediaTrimStartSec={message.mediaTrimStartSec}
+      mediaTrimEndSec={message.mediaTrimEndSec}
+      recipientName={message.recipientName}
+      fromName={fromFirstName}
+      sentAt={message.sentAt?.toISOString() ?? null}
+    />
+  )
+}
 
-      <header className="relative z-10 max-w-[1400px] mx-auto px-5 md:px-12 py-5 md:py-8 border-b border-[#2c2416]/10">
-        <p className="flex items-baseline gap-2 md:gap-3">
-          <span className="text-xl md:text-3xl font-serif italic tracking-tight">Ready</span>
-          <span className="h-px w-6 bg-[#2c2416] hidden sm:block" />
-          <span className="text-[10px] md:text-xl tracking-[0.2em] md:tracking-[0.3em] uppercase text-[#5c4d2e]">
-            with love
-          </span>
+function RevokedNotice() {
+  return (
+    <div className="min-h-screen bg-[#f5f1e8] flex items-center justify-center p-6">
+      <div className="max-w-md text-center">
+        <p className="text-[10px] tracking-[0.3em] uppercase text-[#8b6f3a] mb-4">
+          ReadyWithLove
         </p>
-      </header>
-
-      <main className="relative z-10 max-w-[800px] mx-auto px-5 md:px-12 py-12 md:py-20">
-        <p className="text-[10px] md:text-xs tracking-[0.3em] md:tracking-[0.4em] uppercase text-[#8b6f3a] mb-3 md:mb-4">
-          · A message has been left for you ·
-        </p>
-        <h1 className="font-serif text-4xl md:text-6xl leading-tight mb-3 md:mb-4">
-          From <span className="italic text-[#8b6f3a]">{fromName}</span>
+        <h1 className="font-serif text-2xl md:text-3xl text-[#2c2416] mb-4">
+          This message is no longer available
         </h1>
-        <p className="text-base md:text-lg text-[#5c4d2e] mb-2">
-          To: <span className="italic">{message.recipientName}</span>
+        <p className="font-serif italic text-[#5c4d2e] leading-relaxed">
+          The sender has withdrawn this link. If you believe this is a
+          mistake, please reach out to them directly.
         </p>
-        {sentDate && (
-          <p className="text-sm italic text-[#8b6f3a]/80 mb-8 md:mb-10">
-            Delivered {sentDate}
-          </p>
-        )}
-
-        {message.subject && (
-          <p className="font-serif italic text-xl md:text-3xl text-[#5c4d2e] mb-8 md:mb-10">
-            {message.subject}
-          </p>
-        )}
-
-        {message.type === 'video' && message.mediaUrl ? (
-          <video
-            src={message.mediaUrl}
-            controls
-            className="w-full bg-black"
-          />
-        ) : (
-          <div className="bg-[#f5f1e8]/80 border border-[#2c2416]/10 p-6 md:p-12 font-serif text-base md:text-lg leading-relaxed whitespace-pre-wrap text-[#2c2416]">
-            {message.content}
-          </div>
-        )}
-
-        <p className="mt-10 md:mt-14 text-sm md:text-base italic text-[#8b6f3a] text-center">
-          Take your time. Read it again whenever you like.
-        </p>
-      </main>
-
-      <footer className="relative z-10 max-w-[1400px] mx-auto px-5 md:px-12 py-8 mt-12 border-t border-[#2c2416]/10 text-[10px] md:text-xs text-[#5c4d2e]/70 italic">
-        Delivered with care by ReadyWithLove.
-      </footer>
+      </div>
     </div>
   )
 }
 
-function NotFound() {
+function NotYetAvailableNotice() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#f5f1e8] text-[#2c2416] px-5">
-      <div className="text-center max-w-md">
-        <h1 className="font-serif text-4xl md:text-5xl italic mb-4 text-[#8b6f3a]">
-          This link is no longer active.
+    <div className="min-h-screen bg-[#f5f1e8] flex items-center justify-center p-6">
+      <div className="max-w-md text-center">
+        <p className="text-[10px] tracking-[0.3em] uppercase text-[#8b6f3a] mb-4">
+          ReadyWithLove
+        </p>
+        <h1 className="font-serif text-2xl md:text-3xl text-[#2c2416] mb-4">
+          This message isn&rsquo;t ready yet
         </h1>
-        <p className="text-base text-[#5c4d2e]">
-          The message may have been revoked, or the link may be incomplete.
-          If you believe this is in error, please contact the sender directly.
+        <p className="font-serif italic text-[#5c4d2e] leading-relaxed">
+          It hasn&rsquo;t been delivered. You&rsquo;ll receive an email
+          when it is.
         </p>
       </div>
     </div>

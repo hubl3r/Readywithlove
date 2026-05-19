@@ -58,6 +58,10 @@ export async function PATCH(request: Request) {
   if (typeof body.ttsEnabled === 'boolean') data.ttsEnabled = body.ttsEnabled
   if (typeof body.sttEnabled === 'boolean') data.sttEnabled = body.sttEnabled
   if (typeof body.reducedMotion === 'boolean') data.reducedMotion = body.reducedMotion
+  // Zip 2c.6: opt out of new-contribution emails
+  if (typeof body.notifyOnContribution === 'boolean') {
+    data.notifyOnContribution = body.notifyOnContribution
+  }
 
   if (body.preferredVoiceURI !== undefined) {
     if (body.preferredVoiceURI === null || body.preferredVoiceURI === '') {

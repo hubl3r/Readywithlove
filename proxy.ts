@@ -16,6 +16,12 @@ const isPublicRoute = createRouteMatcher([
   // The endpoint itself enforces in-memory IP rate limits and has no
   // database access, so making it public is safe.
   '/api/ai/cleanup-text',
+
+  // Zip 2c.6 — Recipient delivery view. The token IS the credential
+  // here, and the page itself verifies linkRevokedAt before rendering
+  // content. No Clerk session required; the recipient is by definition
+  // someone outside the app.
+  '/m/(.*)',
 ])
 
 export default clerkMiddleware(async (auth, req) => {

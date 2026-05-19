@@ -28,6 +28,10 @@ interface Message {
   archivedAt: string | null
   approvalPromptedAt: string | null
   approvalExpiresAt: string | null
+  // Zip 2c.6: recipient link controls
+  deliveryToken: string | null
+  viewCount: number
+  linkRevokedAt: string | null
 }
 
 export default function MessageDetailPage() {
@@ -55,6 +59,9 @@ function Inner() {
   const [askSendNow, setAskSendNow] = useState(false)
   const [askDelete, setAskDelete] = useState(false)
   const [askArchive, setAskArchive] = useState(false)
+  // Zip 2c.6: revoke recipient link
+  const [askRevoke, setAskRevoke] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
 
   const banner =
     search.get('sent') ? 'Sent.'
@@ -101,6 +108,37 @@ function Inner() {
     } catch {
       setBusy(false)
     }
+  }
+
+  // Zip 2c.6 — revoke recipient link. The endpoint sets linkRevokedAt on
+  // the message; the /m/[token] page reads it and shows the
+  // "no longer available" notice.
+  const revokeLink = async () => {
+    setAskRevoke(false)
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/messages/${id}/revoke-link`, { method: 'POST' })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.error || 'Could not revoke link')
+      }
+      await refetch()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copyRecipientLink = async () => {
+    if (!msg?.deliveryToken) return
+    const url = `${window.location.origin}/m/${msg.deliveryToken}`
+    try {
+      await navigator.clipboard.writeText(url)
+      setLinkCopied(true)
+      window.setTimeout(() => setLinkCopied(false), 2000)
+    } catch { /* ignore */ }
   }
 
   if (loading) {
@@ -249,6 +287,57 @@ function Inner() {
           <p className="mb-4 text-sm text-[#c0392b] italic">{error}</p>
         )}
 
+        {/* Zip 2c.6 — delivered message panel. Shows view count and lets the
+            sender copy or revoke the recipient link. Only renders for sent
+            (not archived) messages that actually have a token. */}
+        {msg.state === 'sent' && msg.deliveryToken && (
+          <div className="mt-10 mb-2 border-t border-[#2c2416]/15 pt-6">
+            <p className="text-[11px] tracking-[0.3em] uppercase text-[#8b6f3a] mb-3">
+              Recipient link
+            </p>
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mb-4">
+              <p className="text-sm text-[#5c4d2e]">
+                Viewed{' '}
+                <span className="font-medium text-[#2c2416] tabular-nums">
+                  {msg.viewCount}
+                </span>{' '}
+                {msg.viewCount === 1 ? 'time' : 'times'}
+              </p>
+              {msg.linkRevokedAt ? (
+                <p className="text-sm italic text-[#c0392b]">
+                  Link revoked{' '}
+                  {new Date(msg.linkRevokedAt).toLocaleDateString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                  })}
+                </p>
+              ) : (
+                <p className="text-xs italic text-[#5c4d2e]/60">
+                  Anyone with the link can view.
+                </p>
+              )}
+            </div>
+            {!msg.linkRevokedAt && (
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={copyRecipientLink}
+                  disabled={busy}
+                  className="px-4 py-2 border border-[#2c2416]/30 hover:border-[#2c2416] transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+                >
+                  {linkCopied ? '✓ Link copied' : '⎘ Copy link'}
+                </button>
+                <button
+                  onClick={() => setAskRevoke(true)}
+                  disabled={busy}
+                  className="px-4 py-2 border border-[#c0392b]/40 text-[#c0392b] hover:bg-[#c0392b]/5 transition text-xs tracking-[0.2em] uppercase disabled:opacity-50"
+                >
+                  Revoke link
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 mt-8">
           {msg.state !== 'sent' && msg.state !== 'archived' && (
             <Link
@@ -328,6 +417,16 @@ function Inner() {
         confirmLabel="Delete forever"
         onConfirm={remove}
         onCancel={() => setAskDelete(false)}
+      />
+
+      <ConfirmDialog
+        open={askRevoke}
+        title="Revoke this link?"
+        message="The recipient (and anyone they shared the link with) will no longer be able to view this message. They'll see a notice that the link has been withdrawn. You can re-deliver this message later if you change your mind."
+        tone="danger"
+        confirmLabel="Revoke link"
+        onConfirm={revokeLink}
+        onCancel={() => setAskRevoke(false)}
       />
     </div>
   )
