@@ -6,6 +6,7 @@ const isPublicRoute = createRouteMatcher([
   '/about',
   '/sign-in(.*)',
   '/sign-up(.*)',
+  '/api/cron/(.*)',
 
   // Zip 2c.1 — Contribution flow for invitees with no account.
   '/contribute(.*)',
