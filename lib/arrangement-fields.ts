@@ -52,6 +52,24 @@ export type FieldType =
 
 export type FieldValue = string | boolean | string[] | null
 
+// ---------------------------------------------------------------------------
+// Disposition branching
+// ---------------------------------------------------------------------------
+// The "Burial or cremation" item drives what the rest of Final disposition
+// shows. `choice` is stored on THAT item; its value is threaded down to the
+// sibling items so fields and labels can adapt. `null` means undecided / not
+// yet chosen — in that state we show everything (never hide before there's a
+// basis to). Body donation is NOT a branch: it's an option inside burial and
+// cremation, so it isn't one of these values.
+export type DispositionChoice = 'burial' | 'cremation' | 'green'
+
+export type FieldContext = {
+  choice: DispositionChoice | null
+  // The item's own current draft values — lets a field react to a sibling
+  // field in the same item (e.g. "other" → reveal a free-text box).
+  data: Record<string, FieldValue>
+}
+
 export type FieldDef = {
   key: string
   label: string
@@ -64,6 +82,11 @@ export type FieldDef = {
   toggleLabel?: string
   // For `list`, the label on the add button (default "Add").
   addLabel?: string
+  // Visibility predicate. Pure UI — the API ignores it, so a hidden field's
+  // stored value is preserved (switching branches never deletes data).
+  showIf?: (ctx: FieldContext) => boolean
+  // Per-choice label overrides (e.g. casket vs urn).
+  labelFor?: Partial<Record<DispositionChoice, string>>
 }
 
 export type ItemForm = {
@@ -85,6 +108,13 @@ export function formKey(category: string, title: string): string {
 // The forms, one per seed item.
 // ---------------------------------------------------------------------------
 
+// Branching helpers used by the Final-disposition forms below. When the choice
+// is null (undecided / not yet chosen) every field shows. Green/natural burial
+// follows the burial path (it has a plot, no ashes).
+const isBurialPath = (c: DispositionChoice | null) =>
+  c === null || c === 'burial' || c === 'green'
+const isCremationPath = (c: DispositionChoice | null) => c === null || c === 'cremation'
+
 const NOTES_FIELD: FieldDef = {
   key: 'notes',
   label: 'Notes',
@@ -105,7 +135,6 @@ export const ITEM_FORMS: Record<string, ItemForm> = {
           { value: 'burial', label: 'Burial' },
           { value: 'cremation', label: 'Cremation' },
           { value: 'green', label: 'Green / natural burial' },
-          { value: 'donation', label: 'Donation to science' },
           { value: 'undecided', label: 'Still deciding' },
         ],
       },
@@ -114,6 +143,22 @@ export const ITEM_FORMS: Record<string, ItemForm> = {
         label: 'In your words',
         type: 'textarea',
         placeholder: 'Why this choice, or anything you’d want understood about it.',
+      },
+      {
+        key: 'donation',
+        label: '',
+        type: 'boolean',
+        toggleLabel: 'I’d like my body donated to science / medical research first',
+        help: 'Many programs cremate and return the remains afterward — your choice above still applies.',
+        // An option within the burial and cremation paths — not its own branch.
+        showIf: ({ choice }) => choice !== 'green',
+      },
+      {
+        key: 'donationProgram',
+        label: 'Donation program or registry',
+        type: 'text',
+        placeholder: 'e.g. a medical school or whole-body donation program',
+        showIf: ({ data }) => data.donation === true,
       },
     ],
   },
@@ -149,19 +194,53 @@ export const ITEM_FORMS: Record<string, ItemForm> = {
         label: 'Cemetery, or where ashes should go',
         type: 'text',
         placeholder: 'Name or place',
+        labelFor: {
+          burial: 'Cemetery',
+          green: 'Green burial ground',
+          cremation: 'Where the ashes should go',
+        },
       },
-      { key: 'plot', label: 'Plot / section / lot number', type: 'text' },
+      // Burial / green only.
+      {
+        key: 'plot',
+        label: 'Plot / section / lot number',
+        type: 'text',
+        showIf: ({ choice }) => isBurialPath(choice),
+      },
       {
         key: 'deedLocation',
         label: 'Where the deed or paperwork is kept',
         type: 'text',
+        showIf: ({ choice }) => isBurialPath(choice),
+      },
+      // Cremation only.
+      {
+        key: 'ashesDisposition',
+        label: 'What should happen to the ashes',
+        type: 'select',
+        options: [
+          { value: 'scatter', label: 'Scatter' },
+          { value: 'inter', label: 'Inter (bury, or place in a niche)' },
+          { value: 'keep', label: 'Keep with family' },
+          { value: 'divide', label: 'Divide among loved ones' },
+          { value: 'other', label: 'Something else' },
+        ],
+        showIf: ({ choice }) => isCremationPath(choice),
+      },
+      {
+        key: 'ashesDispositionOther',
+        label: 'Tell us more',
+        type: 'text',
+        placeholder: 'What you’d like done',
+        showIf: ({ choice, data }) =>
+          isCremationPath(choice) && data.ashesDisposition === 'other',
       },
       {
         key: 'ashes',
-        label: 'Wishes for ashes',
+        label: 'Anything more about the ashes',
         type: 'textarea',
-        placeholder: 'Scattering, keeping, dividing among family…',
-        help: 'If cremation.',
+        placeholder: 'Where, when, who should be there — any specifics.',
+        showIf: ({ choice }) => isCremationPath(choice),
       },
     ],
   },
@@ -172,6 +251,11 @@ export const ITEM_FORMS: Record<string, ItemForm> = {
         label: 'Preference',
         type: 'textarea',
         placeholder: 'Material, style, or a specific product.',
+        labelFor: {
+          burial: 'Casket preference',
+          cremation: 'Urn preference',
+          green: 'Shroud or vessel preference',
+        },
       },
       { key: 'purchased', label: '', type: 'boolean', toggleLabel: 'Already purchased' },
     ],
@@ -521,6 +605,37 @@ export const FALLBACK_FORM: ItemForm = {
 
 export function getItemForm(category: string, title: string): ItemForm {
   return ITEM_FORMS[formKey(category, title)] ?? FALLBACK_FORM
+}
+
+// ---------------------------------------------------------------------------
+// Item-title overrides by disposition choice
+// ---------------------------------------------------------------------------
+// The DB row title stays stable (e.g. 'Headstone or marker'); this only
+// changes what the user sees once a branch is chosen.
+export const ITEM_TITLE_BY_CHOICE: Record<
+  string,
+  Partial<Record<DispositionChoice, string>>
+> = {
+  'Cemetery plot or cremation arrangement': {
+    burial: 'Cemetery & plot',
+    green: 'Green burial site',
+    cremation: 'Ashes & disposition',
+  },
+  'Casket or urn preference': {
+    burial: 'Casket preference',
+    cremation: 'Urn preference',
+    green: 'Shroud or vessel',
+  },
+  'Headstone or marker': { cremation: 'Plaque' },
+}
+
+export function displayTitleFor(
+  category: string,
+  title: string,
+  choice: DispositionChoice | null,
+): string {
+  if (category !== 'disposition' || !choice) return title
+  return ITEM_TITLE_BY_CHOICE[title]?.[choice] ?? title
 }
 
 // Re-export for convenience where both are needed.

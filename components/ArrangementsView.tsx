@@ -29,6 +29,7 @@ import {
   type ArrangementCategory,
 } from '@/lib/arrangement-seeds'
 import ArrangementItem, { type ArrangementRow } from '@/components/ArrangementItem'
+import { type DispositionChoice } from '@/lib/arrangement-fields'
 
 type Props = {
   arrangements: ArrangementRow[]
@@ -82,6 +83,18 @@ export default function ArrangementsView({
       }
     }
     return map
+  }, [arrangements])
+
+  // The Final-disposition branch driver. Read from the "Burial or cremation"
+  // item; anything that isn't a real branch (undecided / unset / legacy
+  // 'donation') collapses to null, which means "show everything".
+  const dispositionChoice = useMemo<DispositionChoice | null>(() => {
+    const driver = arrangements.find(
+      (a) => a.category === 'disposition' && a.title === 'Burial or cremation',
+    )
+    const raw = (driver?.structuredData as Record<string, unknown> | null | undefined)
+      ?.choice
+    return raw === 'burial' || raw === 'cremation' || raw === 'green' ? raw : null
   }, [arrangements])
 
   const sectionsEngaged = useMemo(() => {
@@ -323,6 +336,7 @@ export default function ArrangementsView({
                               hint={hintFor(item.category, item.title)}
                               isLast={itemIdx === items.length - 1}
                               isOpen={openItemId === item.id}
+                              dispositionChoice={dispositionChoice}
                               onToggle={() => toggleItem(item.id)}
                               onSaved={handleSaved}
                             />

@@ -13,9 +13,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import {
   getItemForm,
+  displayTitleFor,
   ARRANGEMENT_STATUSES,
   STATUS_PILL_LABELS,
   type ArrangementStatus,
+  type DispositionChoice,
   type FieldDef,
   type FieldValue,
 } from '@/lib/arrangement-fields'
@@ -37,6 +39,9 @@ type Props = {
   hint?: string
   isLast: boolean
   isOpen: boolean
+  // The current Final-disposition choice (from the "Burial or cremation"
+  // item), threaded down so this item's fields and title can branch.
+  dispositionChoice: DispositionChoice | null
   onToggle: () => void
   onSaved: (updated: ArrangementRow) => void
 }
@@ -53,10 +58,13 @@ export default function ArrangementItem({
   hint,
   isLast,
   isOpen,
+  dispositionChoice,
   onToggle,
   onSaved,
 }: Props) {
   const form = useMemo(() => getItemForm(item.category, item.title), [item.category, item.title])
+
+  const displayTitle = displayTitleFor(item.category, item.title, dispositionChoice)
 
   const initialData = useMemo(
     () => (item.structuredData ?? {}) as Record<string, FieldValue>,
@@ -87,6 +95,20 @@ export default function ArrangementItem({
   function setField(key: string, value: FieldValue) {
     setDraftData((prev) => ({ ...prev, [key]: value }))
   }
+
+  // Branch the form to the disposition choice: drop hidden fields and apply
+  // any per-choice label override. Hidden fields keep their stored values —
+  // this is display only, so switching branches never deletes data.
+  const visibleFields = useMemo(() => {
+    const ctx = { choice: dispositionChoice, data: draftData }
+    return form.fields
+      .filter((f) => !f.showIf || f.showIf(ctx))
+      .map((f) =>
+        f.labelFor && dispositionChoice && f.labelFor[dispositionChoice]
+          ? { ...f, label: f.labelFor[dispositionChoice] as string }
+          : f,
+      )
+  }, [form.fields, dispositionChoice, draftData])
 
   async function save() {
     setSaving(true)
@@ -148,7 +170,7 @@ export default function ArrangementItem({
         {indicator}
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="font-sans text-base text-[#2c2416]">{item.title}</span>
+            <span className="font-sans text-base text-[#2c2416]">{displayTitle}</span>
             {item.isCore && (
               <span className="font-sans text-[10px] uppercase tracking-[0.18em] text-[#8b6f3a]">
                 essential
@@ -213,7 +235,7 @@ export default function ArrangementItem({
                   draftStatus === 'not-applicable' ? 'opacity-40' : 'opacity-100'
                 }`}
               >
-                {form.fields.map((field) => (
+                {visibleFields.map((field) => (
                   <Field
                     key={field.key}
                     field={field}
