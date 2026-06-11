@@ -28,7 +28,12 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <ClerkProvider>
+    <ClerkProvider
+      signInUrl="/sign-in"
+      signUpUrl="/sign-up"
+      signInFallbackRedirectUrl="/dashboard"
+      signUpFallbackRedirectUrl="/dashboard"
+    >
       {/* data-scroll-behavior fixes Next.js warning about smooth scroll on route changes */}
       <html lang="en" className={`${cormorant.variable} ${inter.variable}`} data-scroll-behavior="smooth">
         <body className="antialiased font-sans">

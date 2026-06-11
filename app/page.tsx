@@ -175,10 +175,10 @@ export default function Home() {
         </div>
         <div className="flex items-center gap-3 md:gap-8 text-[10px] md:text-sm tracking-widest uppercase">
           <Show when="signed-out">
-            <SignInButton mode="modal">
+            <SignInButton>
               <button className="hover:text-[#8b6f3a] transition cursor-pointer whitespace-nowrap">Sign In</button>
             </SignInButton>
-            <SignUpButton mode="modal">
+            <SignUpButton>
               <button className="border border-[#2c2416] px-3 md:px-6 py-2 md:py-3 hover:bg-[#2c2416] hover:text-[#f5f1e8] transition cursor-pointer whitespace-nowrap">Begin</button>
             </SignUpButton>
           </Show>
@@ -254,7 +254,7 @@ export default function Home() {
               className="flex flex-col sm:flex-row gap-4 md:gap-6 mt-8 md:mt-12 sm:items-center flex-wrap relative"
             >
               <Show when="signed-out">
-                <SignUpButton mode="modal">
+                <SignUpButton>
                   <button className="group flex items-center justify-center gap-3 bg-[#2c2416] text-[#f5f1e8] px-6 md:px-8 py-4 hover:bg-[#8b6f3a] transition cursor-pointer w-full sm:w-auto">
                     <span className="tracking-[0.2em] uppercase text-xs md:text-sm">Begin Your Story</span>
                     <span className="group-hover:translate-x-1 transition">→</span>
@@ -506,7 +506,7 @@ export default function Home() {
           <span className="italic">starts</span> with a sentence.
         </h2>
         <Show when="signed-out">
-          <SignUpButton mode="modal">
+          <SignUpButton>
             <button className="bg-[#2c2416] text-[#f5f1e8] px-8 md:px-12 py-4 md:py-5 tracking-[0.2em] uppercase text-xs md:text-sm hover:bg-[#8b6f3a] transition cursor-pointer">
               Write the first line
             </button>
