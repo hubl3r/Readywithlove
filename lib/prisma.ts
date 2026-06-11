@@ -1,7 +1,11 @@
 // lib/prisma.ts
-import { PrismaClient } from '../app/generated/prisma/client'
+import { PrismaClient, Prisma } from '../app/generated/prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { Pool } from 'pg'
+
+// Re-export the Prisma namespace so callers can reach helpers like
+// Prisma.DbNull / Prisma.JsonNull without importing from the generated path.
+export { Prisma }
 
 // In Vercel serverless, every cold start spins up a new Lambda. Without a
 // shared pool reference, we'd open a new Postgres pool each time and quickly
@@ -18,7 +22,6 @@ const pool =
   new Pool({
     connectionString: process.env.DATABASE_URL,
     // Single connection per Lambda — they're single-threaded so >1 wastes slots.
-    // Vercel Postgres has a generous limit but other providers don't.
     max: 1,
     // Close idle conns after 10s so a stuck Lambda doesn't hold them forever.
     idleTimeoutMillis: 10_000,

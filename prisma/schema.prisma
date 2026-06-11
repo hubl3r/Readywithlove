@@ -184,15 +184,54 @@ model Photo {
   @@index([timelineItemId])
 }
 
+// Zip 2d.1: Arrangements foundation. Rebuilt from the original four-field
+// placeholder (type/vendor/contact/notes) into the proper module shape.
+//
+//   category                  — one of: disposition, service, notifications,
+//                               legal, wishes. Drives section grouping in
+//                               the UI.
+//   title                     — display name of the checklist item.
+//   status                    — planned | in-progress | arranged |
+//                               not-applicable. 2d.2 lets users move items
+//                               along. 2d.1 leaves everything at "planned".
+//   isCore                    — flags the four essentials (disposition
+//                               preference, will location, funeral home,
+//                               executor contact). Soft visual emphasis,
+//                               not a hard requirement.
+//   executorVisibleAfterDeath — per-entry switch for what becomes visible
+//                               to the executor on death. Default true.
+//                               The mechanism that flips visibility lands
+//                               in the Executor module (2e).
+//   structuredData            — Json bag for per-type fields (will location,
+//                               funeral home contract #, bank account
+//                               last-4, etc.). Schema evolves without
+//                               migrations.
+//   vendor / contact / notes  — kept from the original schema. notes is
+//                               where the user's freeform overflow lives.
+//                               2d.1 seeds the column with the seed-file
+//                               hint as a paper trail, but the UI pulls
+//                               hints from code at render time.
+//   sortOrder                 — int that packs category index + item
+//                               position, with core items floated up.
 model Arrangement {
-  id        String   @id @default(cuid())
-  userId    String
-  type      String
-  vendor    String
-  contact   String?
-  notes     String?
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id])
+  id                        String   @id @default(cuid())
+  userId                    String
+  category                  String
+  title                     String
+  status                    String   @default("planned")
+  isCore                    Boolean  @default(false)
+  executorVisibleAfterDeath Boolean  @default(true)
+  structuredData            Json?
+  vendor                    String?
+  contact                   String?
+  notes                     String?
+  sortOrder                 Int      @default(0)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+  user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, category])
 }
 
 model VaultItem {
@@ -235,6 +274,25 @@ model Settings {
   // Default on — silent submissions feel uncared-for. Honored at email
   // send time; per-contributor dedupe still applies even when enabled.
   notifyOnContribution Boolean @default(true)
+
+  // Zip 2d.1: Arrangements module section acknowledgements + seed stamp.
+  //   arrSeededAt — set the first time the user visits /dashboard/arrangements.
+  //                 Presence of a value is the "already seeded" signal; the
+  //                 seed is a no-op on subsequent visits.
+  //   arrAck*     — per-category "I've considered this section" flags.
+  //                 The UI to flip these lands in 2d.3; columns exist now
+  //                 so 2d.3 needs no migration.
+  arrSeededAt          DateTime?
+  arrAckDisposition    Boolean   @default(false)
+  arrAckService        Boolean   @default(false)
+  arrAckNotifications  Boolean   @default(false)
+  arrAckLegal          Boolean   @default(false)
+  arrAckWishes         Boolean   @default(false)
+
+  // Optional note rendered at the top of the executor preview (2d.4) for
+  // whoever opens this section after the user is gone. Edited in-place on
+  // /dashboard/arrangements. Null/empty = no note.
+  arrFinalMessage      String?
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

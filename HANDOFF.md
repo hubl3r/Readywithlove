@@ -14,41 +14,50 @@ don't append history.
 - **Repo:** `C:\Users\Adam\Documents\.Adam\ReadywithLove` → GitHub `hubl3r/Readywithlove` (branch `main`)
 - **Deploy:** push to `main` → Vercel auto-deploys production
 - **Stack:** Next.js 16 (App Router), Prisma 7 + Postgres, Clerk auth, Vercel Blob, Resend email
-- **Run local:** `npm run dev` · **Verify:** `npm run verify` · **Ship:** `npm run ship "msg"`
+- **Run local:** `npm run dev` · **Verify:** `npm run verify` (= `tsc --noEmit && next build`) · **Ship:** `npm run ship "msg"`
 
 ---
 
 ## Current phase
 
-**Phase 0 — Project scaffolding** (see `PLAN.md`). Setting up handoff/rules/
-parking-lot/plan docs and the ship workflow. Next up is **Phase 1 — finish
-Arrangements**.
+**Phase 1 — Arrangements.** Built and type-checked; awaiting local confirm + ship.
 
 ## Last action
 
-Created `PLAN.md`, `HANDOFF.md`, `RULES.md`, `PARKINGLOT.md`, and the
-`verify` + `ship` npm scripts (`scripts/ship.mjs`). Not yet committed.
+Built the structured per-item editor for Arrangements (Option 3):
+- `lib/arrangement-fields.ts` — per-item field schemas for all 33 items + status constants
+- `app/api/arrangements/[id]/route.ts` — PATCH (status + structuredData, validated server-side)
+- `components/ArrangementItem.tsx` — inline-expand editor (status pills + per-type field renderers: text/textarea/tel/email/select/boolean/date/list)
+- `components/ArrangementsView.tsx` — lifted to state; live progress; removed the "next update" stub
+- Fixed a pre-existing Prisma 7 bug: `structuredData: null` → `Prisma.DbNull` in seed route + page; exported `Prisma` from `lib/prisma.ts`
+- Fixed stale npm scripts: `next lint` (removed in Next 16) → `lint: eslint .`, `verify: tsc --noEmit && next build`
+
+`tsc --noEmit` passes clean. NOT yet committed.
 
 ## Next action
 
-1. Commit the scaffolding: `npm run ship "phase 0: project scaffolding + ship workflow"`
-2. Start **Phase 1**: read the uncommitted Arrangements code and list done-vs-missing.
+1. **Local confirm:** `npm run dev`, open `/dashboard/arrangements`. Expand items across categories, set status, fill fields (incl. a `list` field like Music/Banks), Save, reload to confirm persistence; watch the progress bar move.
+2. `npm run verify` (full build).
+3. `npm run ship "phase 1: structured arrangements editor"` → confirm live on Vercel.
+4. Then **Phase 2 — Executor**.
 
 ## Open threads / watch-outs
 
-- **Uncommitted WIP in the tree:** Arrangements feature (`ArrangementsView.tsx`,
-  `app/api/arrangements/`, `app/dashboard/arrangements/`, `lib/arrangement-seeds.ts`,
-  two migrations, schema + settings + AppNav edits). Decide whether scaffolding
-  and Arrangements ship together or separately before the first `ship`.
-- `Ready Handover.zip` is sitting untracked in the repo root — confirm whether it
-  should be committed, git-ignored, or removed.
-- `node_modules` is present in the working tree mount; ensure `.gitignore` keeps
-  it out of commits.
+- **TOOLING GOTCHA (important):** On this machine's mounted repo, the assistant's
+  Edit/Write tools intermittently corrupt files (trailing NUL bytes or truncation),
+  and the Linux shell mount reads recent host writes with a lag. Reliable approach
+  used: write files via the shell (`cat > file <<'EOF'`) and verify with `tsc`.
+  The host files (what git/Vercel see) are correct; trust `tsc`, not first-read bash.
+- **Still uncommitted:** Phase 0 scaffolding (if not already pushed) + all Phase 1
+  Arrangements work. `git add -A` is fine now — there's no stray WIP to exclude
+  except `Ready Handover.zip` (still untracked in root — decide: commit / ignore / remove).
+- **Deferred to later phases (parked):** per-section "acknowledge" UI (`arrAck*`
+  columns exist), and the executor-facing read-only preview of arrangements.
+- `npm run verify` needs local env (DATABASE_URL, Clerk keys) for `next build`.
 
 ---
 
 ## Update protocol
 
-At the end of each working session, update the four fields above:
-**Current phase**, **Last action**, **Next action**, **Open threads**. That's the
-whole handoff — everything else lives in `PLAN.md` / `RULES.md` / `PARKINGLOT.md`.
+At the end of each working session, update **Current phase**, **Last action**,
+**Next action**, **Open threads**. Everything else lives in PLAN / RULES / PARKINGLOT.

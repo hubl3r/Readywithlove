@@ -6,8 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "verify": "next lint && next build",
+    "lint": "eslint .",
+    "verify": "tsc --noEmit && next build",
     "ship": "node scripts/ship.mjs",
     "postinstall": "prisma generate"
   },

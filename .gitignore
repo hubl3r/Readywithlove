@@ -24,6 +24,9 @@
 .DS_Store
 *.pem
 
+# local handover archive (not for repo)
+Ready Handover.zip
+
 # debug
 npm-debug.log*
 yarn-debug.log*

@@ -12,6 +12,11 @@ const FONT_SCALES = ['small', 'normal', 'large', 'xlarge'] as const
 // cap length so it can't be used as a bag-of-bytes column.
 const MAX_VOICE_URI_LENGTH = 256
 
+// The user's note-to-whoever-opens-this on Arrangements. Generous cap;
+// this is a personal message, not a database firehose, and 10k characters
+// is well beyond what anyone would write while still bounded.
+const MAX_FINAL_MESSAGE_LENGTH = 10_000
+
 // GET — return settings, creating defaults on first read
 export async function GET() {
   const { userId } = await auth()
@@ -32,6 +37,9 @@ export async function GET() {
 //
 // Zip 2c.3: adds `preferredVoiceURI` (string|null). Cleared when sent as
 // null or empty string; stored otherwise (up to MAX_VOICE_URI_LENGTH).
+//
+// Zip 2d.1.2: adds `arrFinalMessage` (string|null). Same null/empty
+// clearing pattern. Capped at 10k characters.
 export async function PATCH(request: Request) {
   const { userId } = await auth()
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -77,6 +85,32 @@ export async function PATCH(request: Request) {
     } else {
       return NextResponse.json(
         { error: 'Invalid preferredVoiceURI' },
+        { status: 400 }
+      )
+    }
+  }
+
+  // Zip 2d.1.2: arrFinalMessage. Same null/empty clearing pattern as
+  // preferredVoiceURI. Trimmed before length check so trailing whitespace
+  // doesn't push a borderline message over the cap.
+  if (body.arrFinalMessage !== undefined) {
+    if (body.arrFinalMessage === null || body.arrFinalMessage === '') {
+      data.arrFinalMessage = null
+    } else if (typeof body.arrFinalMessage === 'string') {
+      const trimmed = body.arrFinalMessage.trim()
+      if (trimmed.length === 0) {
+        data.arrFinalMessage = null
+      } else if (trimmed.length > MAX_FINAL_MESSAGE_LENGTH) {
+        return NextResponse.json(
+          { error: 'arrFinalMessage too long' },
+          { status: 400 }
+        )
+      } else {
+        data.arrFinalMessage = trimmed
+      }
+    } else {
+      return NextResponse.json(
+        { error: 'Invalid arrFinalMessage' },
         { status: 400 }
       )
     }

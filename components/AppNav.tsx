@@ -26,7 +26,7 @@ const ITEMS: NavItem[] = [
   { num: 'iii.',  label: 'Messages',      href: '/dashboard/messages',                 available: true  },
   { num: 'iv.',   label: 'Contributions', href: '/dashboard/contributions',             available: true,  unreadKey: 'contributions' },
   { num: 'v.',    label: 'Contacts',      href: '/dashboard/contacts',                 available: false },
-  { num: 'vi.',   label: 'Arrangements',  href: '/dashboard/arrangements',             available: false },
+  { num: 'vi.',   label: 'Arrangements',  href: '/dashboard/arrangements',             available: true  },
   { num: 'vii.',  label: 'Vault',         href: '/dashboard/vault',                    available: false },
   { num: 'viii.', label: 'Executor',      href: '/dashboard/executor',                 available: false },
 ]
